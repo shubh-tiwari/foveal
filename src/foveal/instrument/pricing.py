@@ -32,8 +32,10 @@ def prices_for(model: str) -> tuple[float, float, float]:
 
 
 def call_cost_usd(model: str, usage: dict[str, Any]) -> float:
-    inp, out, cread = prices_for(model)
     u = usage or {}
+    if u.get("cost_usd") is not None:  # exact charge reported by the provider (OpenRouter)
+        return float(u["cost_usd"])
+    inp, out, cread = prices_for(model)
     return (
         (u.get("input_tokens") or 0) * inp
         + (u.get("cache_creation_input_tokens") or 0) * inp * CACHE_WRITE_MULT

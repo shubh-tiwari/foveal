@@ -39,6 +39,7 @@ class AgentConfig:
     max_reader_steps: int = 8
     max_tokens: int = 16000
     max_cost_usd: float = 6.0
+    provider: str = "anthropic"  # anthropic | openrouter
 
 
 ORCH_SYSTEM = """You answer one question about a long PDF document that you cannot read \
@@ -292,6 +293,9 @@ class DocQA:
             "messages": messages,
             "tools": tools,
         }
+        if self.cfg.provider == "openrouter":  # Anthropic-only params do not apply
+            kwargs["output_config"] = {"effort": self.cfg.effort}
+            return self.client.messages.create(**kwargs)
         betas: list[str] = []
         if _is_high_tier(model):
             kwargs["thinking"] = {"type": "adaptive"}

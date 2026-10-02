@@ -189,6 +189,12 @@ Goal: one agent's perception becomes every agent's knowledge, and stale facts ar
   start if their caps exceed `--budget`
 - [x] Technical report draft: `docs/technical_report.md`
 - [ ] Live evaluations (pending budget): `p1-scale` ($14), `p2-live` ($5), `p3-facts` ($3)
-- [ ] Cross-provider run via the OpenAI-format middleware (e.g. OpenRouter)
+- [x] OpenRouter backend (`bench/openrouter.py`, `--provider openrouter`): Anthropic-shaped
+  requests and replies over OpenRouter's chat API. Images in tool results move to a user
+  message, reasoning_details are replayed unmodified, and the exact cost comes from
+  `usage.cost`. Pricing check (2 Oct 2026): Claude costs the same on OpenRouter as direct.
+  Repriced from our logs, the memory run would cost about $0.31 on Qwen3.7 Plus and $0.52 on
+  Gemini 3.8 Flash, against $1.41 on Sonnet 5.5.
+- [ ] Cross-provider smoke test (Qwen3.7 Plus, Gemini 3.8 Flash), then pending runs on them
 - [ ] Stale-action rate on a live screen loop
 - [ ] PyPI release (deferred by the owner)

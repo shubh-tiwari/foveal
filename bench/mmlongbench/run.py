@@ -61,7 +61,17 @@ def main(argv: list[str] | None = None) -> int:
         choices=["images", "memory"],
         help="images: full page images (baseline); memory: foveal L0/L1 + look()",
     )
-    ap.add_argument("--caption-model", default="claude-haiku-4-5")
+    ap.add_argument(
+        "--provider",
+        default="anthropic",
+        choices=["anthropic", "openrouter"],
+        help="openrouter: any OpenRouter model id, e.g. google/gemini-3.8-flash",
+    )
+    ap.add_argument(
+        "--caption-model",
+        default=None,
+        help="default: claude-haiku-4-5 (anthropic) or the reader model (openrouter)",
+    )
     ap.add_argument(
         "--caption-image-tokens",
         type=int,
@@ -96,11 +106,18 @@ def main(argv: list[str] | None = None) -> int:
             Path(".cache/synthetic"), n_docs=min(args.docs, 2), per_doc=min(args.per_doc, 2)
         )
     else:
-        import anthropic
         from dotenv import load_dotenv
 
-        load_dotenv()  # ANTHROPIC_API_KEY from .env (never printed)
-        raw = anthropic.Anthropic()
+        load_dotenv()  # API keys from .env (never printed)
+        if args.provider == "openrouter":
+            from bench.openrouter import OpenRouterClient
+
+            raw = OpenRouterClient()
+            args.no_count_tokens = True  # count_tokens is an Anthropic endpoint
+        else:
+            import anthropic
+
+            raw = anthropic.Anthropic()
         exclude = None
         if args.exclude_docs_from:
             from foveal.instrument.records import read_jsonl
@@ -138,17 +155,21 @@ def main(argv: list[str] | None = None) -> int:
         cache=not args.no_cache,
         fallbacks=not args.no_fallbacks,
         max_cost_usd=args.max_cost_usd,
+        provider=args.provider,
     )
     qa = DocQA(client, tracer, cfg)
     tracer.log_event(type="run", config=vars(args), n_tasks=len(tasks))
 
+    caption_model = args.caption_model or (
+        args.reader_model if args.provider == "openrouter" else "claude-haiku-4-5"
+    )
     memory = None
     if args.mode == "memory":
         store = args.store or (".foveal-dry" if args.dry_run else ".foveal")
         memory = Memory(
             store,
             captioner=Captioner(
-                client, model=args.caption_model, image_tokens=args.caption_image_tokens or None
+                client, model=caption_model, image_tokens=args.caption_image_tokens or None
             ),
             model=args.reader_model,
             long_edge=args.long_edge,

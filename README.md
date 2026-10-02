@@ -110,6 +110,9 @@ uv run python -m bench.suite --dry-run          # every evaluation with fake cli
 uv run python -m bench.suite --run p3-facts --budget 3
 ```
 
+To run the benchmark on any OpenRouter model, set `OPENROUTER_API_KEY` and pass
+`--provider openrouter --orch-model google/gemini-3.8-flash --reader-model google/gemini-3.8-flash`.
+
 The full write-up is [docs/technical_report.md](docs/technical_report.md).
 
 ## Phase 0: measure re-perception
