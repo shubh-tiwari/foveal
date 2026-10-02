@@ -22,9 +22,13 @@ video = [
 redis = [
     "redis>=5",
 ]
+mcp = [
+    "mcp>=1.2",
+]
 
 [project.scripts]
 foveal = "foveal.cli:main"
+foveal-mcp = "foveal.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]

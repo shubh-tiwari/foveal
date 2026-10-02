@@ -132,6 +132,17 @@ class Store:
         a.levels.update(levels)
         self.put(a)
 
+    def find_prefix(self, prefix: str) -> str | None:
+        """Full asset id for a unique id prefix (as shown to models), else None."""
+        if len(prefix) < 6:
+            return None
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT asset_id FROM assets WHERE substr(asset_id, 1, ?) = ? LIMIT 2",
+                (len(prefix), prefix),
+            ).fetchall()
+        return rows[0][0] if len(rows) == 1 else None
+
     # -- versions -----------------------------------------------------------
 
     def add_version(self, source: str, asset_id: str, diff: dict[str, Any]) -> VersionRow:

@@ -76,6 +76,42 @@ mem.poll("reader-1")  # -> [Event(kind="stale", ...)]
 Facts live in the store's SQLite file by default. `Memory(facts=RedisFacts(url))` shares them
 across machines.
 
+## Drop-in middleware and MCP server (Phase 4)
+
+```python
+import anthropic, foveal
+
+mem = foveal.Memory(".foveal")
+client = foveal.wrap(anthropic.Anthropic(), mem)  # or wrap(openai_client, mem, fmt="openai")
+client.messages.create(model="claude-sonnet-5-5", messages=history, max_tokens=4096)
+client.last_stats.saved  # image tokens not sent this call
+```
+
+The wrapper sends each repeated image once and turns a new screenshot from the same tool
+into a diff. Each rewrite depends only on earlier messages, so the history stays
+byte-stable across calls, and prompt caching and preserved thinking keep working.
+`foveal.middleware.LOOK_TOOL` lets the model page any image back in at full detail.
+
+```sh
+foveal-mcp --store .foveal        # MCP server: ingest, look, diff_since, facts, subscribe, poll
+```
+
+To add it to Claude Code: `claude mcp add foveal -- uv run --directory /path/to/foveal foveal-mcp`
+
+`foveal.Assembler` builds a context under a token budget. It picks a level for each asset
+by relevance and recency. Its `CacheModel` demotes old images only when the one-off cache
+rewrite pays for itself over the calls that remain.
+
+## Evaluation
+
+```sh
+uv run python -m bench.suite --report --judge   # report + cost/success chart from existing logs
+uv run python -m bench.suite --dry-run          # every evaluation with fake clients ($0)
+uv run python -m bench.suite --run p3-facts --budget 3
+```
+
+The full write-up is [docs/technical_report.md](docs/technical_report.md).
+
 ## Phase 0: measure re-perception
 
 `foveal.instrument` wraps the Anthropic client without changing any request. It logs every

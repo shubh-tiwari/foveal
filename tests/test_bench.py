@@ -83,3 +83,10 @@ def test_facts_mode_shares_notes_across_questions(tmp_path, monkeypatch):
     assert "p.3: The value on page 3 is 101" in notes and "reader-" in notes
     system, tools = DocQA._tools(doc, "orch")
     assert {"recall_notes", "note"} <= {t["name"] for t in tools} and "share notes" in system
+
+
+def test_suite_refuses_runs_over_budget(capsys):
+    from bench.suite import main as suite
+
+    assert suite(["--run", "p3-facts", "--budget", "1"]) == 2
+    assert "refusing" in capsys.readouterr().out

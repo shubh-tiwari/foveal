@@ -171,21 +171,24 @@ Goal: one agent's perception becomes every agent's knowledge, and stale facts ar
 - Not yet: stale-action rate on a live screen workload, which needs a live computer-use or
   browser loop (Phase 4 evaluation).
 
-## Phase 4 — Budget-aware assembler, interfaces and evaluation
+## Phase 4 — Assembler, interfaces and evaluation (built; live evals pending)
 
-Goal: a drop-in library that builds each model call under a token budget, plus the evidence that it works.
-
-- Context assembler: promote relevant or recent assets, demote old ones, all under `budget_tokens`
-- **Prompt-cache-aware demotion:** model the trade-off between keeping a cached prefix and
-  rewriting history, and demote in batches. No published work on this was found.
-  On models that run the preserved-thinking check, rewriting earlier turns invalidates thinking
-  blocks, so the assembler must prefer append-only strategies there.
-- MCP server: `ingest`, `look`, `diff_since`, `recall_facts`, `write_fact`, `subscribe`
-- SDK middleware: rewrite outgoing history for Anthropic and OpenAI-compatible clients
-  (OpenRouter fits here for cross-provider results)
-- Evaluation:
-  - Baselines: full history, keep-last-N (1/3/5), text summaries, ReVision-style dropping
-  - Workloads: document QA, computer use, video
-  - Metrics: success, image tokens, cost, latency, re-perception, stale-action rate
-  - Results reported as cost–success Pareto curves
-- Deliverables: PyPI release, MCP server, technical report or workshop paper
+- [x] `foveal.Assembler`: levels chosen at insertion under `budget_tokens`, by question
+  relevance and recency. `CacheModel.should_compact` weighs the cache reads saved over the
+  remaining calls against the one-off rewrite, with an extra margin on models that bind
+  thinking to history. `plan_compaction` demotes everything due in one batch.
+- [x] SDK middleware `foveal.wrap(client, memory, fmt="anthropic"|"openai")`: exact repeats
+  become references, and a new screenshot from the same tool becomes a diff. The rewrite is
+  prefix-stable (tested), so caching and preserved thinking keep working. `LOOK_TOOL` and
+  `run_look_tool` page images back in.
+- [x] MCP server `foveal-mcp` (MCP Python SDK 2.x, `MCPServer`) with ingest, ingest_frame,
+  describe, look, diff_since, recall_facts, write_fact, verify_fact, subscribe and poll.
+  Tested in-process and with a real stdio handshake.
+- [x] Evaluation suite `bench/suite.py`: a $0 report and cost/success chart from existing
+  logs (judge verdicts cached), dry runs of every evaluation, and live runs that refuse to
+  start if their caps exceed `--budget`
+- [x] Technical report draft: `docs/technical_report.md`
+- [ ] Live evaluations (pending budget): `p1-scale` ($14), `p2-live` ($5), `p3-facts` ($3)
+- [ ] Cross-provider run via the OpenAI-format middleware (e.g. OpenRouter)
+- [ ] Stale-action rate on a live screen loop
+- [ ] PyPI release (deferred by the owner)
