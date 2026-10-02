@@ -11,13 +11,47 @@ def _tasks(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {r["task_id"]: r for r in records if r.get("type") == "task" and "score" in r}
 
 
+def restrict(recs: list[dict[str, Any]], keep: set[str]) -> list[dict[str, Any]]:
+    """Records for tasks in `keep` only. Each document's ingest (captioning) calls are kept
+    with their cost and image tokens scaled by the share of that document's answered tasks
+    that are kept, so a run that answered more questions is not charged for them."""
+    tasks = _tasks(recs)
+    answered: dict[str, int] = {}
+    kept: dict[str, int] = {}
+    for tid, r in tasks.items():
+        answered[r.get("doc_id")] = answered.get(r.get("doc_id"), 0) + 1
+        if tid in keep:
+            kept[r.get("doc_id")] = kept.get(r.get("doc_id"), 0) + 1
+    out = []
+    for r in recs:
+        tid = str(r.get("task_id"))
+        if r.get("type") == "task":
+            if tid in keep:
+                out.append(r)
+        elif r.get("type") == "call":
+            if tid in keep:
+                out.append(r)
+            elif tid.startswith("ingest:"):
+                doc = tid.split(":", 1)[1]
+                f = kept.get(doc, 0) / answered[doc] if answered.get(doc) else 0.0
+                if f:
+                    meta = {**r.get("meta", {}), "cost_usd": r["meta"]["cost_usd"] * f}
+                    imgs = [
+                        {**i, "tokens": (i.get("tokens") or i.get("est_tokens") or 0) * f}
+                        for i in r.get("images", [])
+                    ]
+                    out.append({**r, "meta": meta, "images": imgs})
+    return out
+
+
 def compare(
     base: list[dict[str, Any]], new: list[dict[str, Any]], rescore: Any = None, ratio: float = 0.95
 ) -> tuple[str, bool]:
     """Markdown comparison. `rescore(gold, pred, fmt, question)` re-scores both runs alike."""
-    sb, sn = compute(base), compute(new)
     tb, tn = _tasks(base), _tasks(new)
     shared = [t for t in tb if t in tn]
+    # costs and tokens over the shared questions only
+    sb, sn = compute(restrict(base, set(shared))), compute(restrict(new, set(shared)))
 
     def sc(r: dict[str, Any]) -> float:
         if rescore is None:
@@ -46,9 +80,9 @@ def compare(
         "| Metric | Baseline | foveal | Change |",
         "| --- | --- | --- | --- |",
         f"| Success | {base_ok:.0f}/{n} | {new_ok:.0f}/{n} | {new_ok - base_ok:+.0f} |",
-        f"| Image tokens (tasks + ingest) | {tok_b:,} | {tok_n:,} | {delta(tok_b, tok_n)} |",
-        f"| Ingest image tokens | {sb.get('ingest_image_tokens', 0):,} | "
-        f"{sn.get('ingest_image_tokens', 0):,} | |",
+        f"| Image tokens (tasks + ingest) | {tok_b:,.0f} | {tok_n:,.0f} | {delta(tok_b, tok_n)} |",
+        f"| Ingest image tokens | {sb.get('ingest_image_tokens', 0):,.0f} | "
+        f"{sn.get('ingest_image_tokens', 0):,.0f} | |",
         f"| Re-perception rate | {sb['reperception_rate']:.1%} | {sn['reperception_rate']:.1%} | |",
         f"| Cost incl. ingest | ${cost_b:.2f} | ${cost_n:.2f} | {delta(cost_b, cost_n)} |",
         f"| Model calls | {sb['n_calls']} | {sn['n_calls']} | |",
@@ -63,6 +97,6 @@ def compare(
     for t in shared:
         lines.append(
             f"| {t} | {sc(tb[t]):.0f} | {sc(tn[t]):.0f} | "
-            f"{bt[t].total if t in bt else 0:,} | {nt[t].total if t in nt else 0:,} |"
+            f"{bt[t].total if t in bt else 0:,.0f} | {nt[t].total if t in nt else 0:,.0f} |"
         )
     return "\n".join(lines) + "\n", ok

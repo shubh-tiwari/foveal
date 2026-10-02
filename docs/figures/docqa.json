@@ -1,0 +1,34 @@
+[
+ {
+  "model": "Claude Sonnet 5.5",
+  "mode": "full pages",
+  "n": 16,
+  "success": 0.625,
+  "cost": 0.25400451875,
+  "image_tokens": 156299.875
+ },
+ {
+  "model": "Claude Sonnet 5.5",
+  "mode": "foveal",
+  "n": 16,
+  "success": 0.625,
+  "cost": 0.0875530875,
+  "image_tokens": 11449.5625
+ },
+ {
+  "model": "Qwen3.7 Plus",
+  "mode": "full pages",
+  "n": 10,
+  "success": 1.0,
+  "cost": 0.06625745920000001,
+  "image_tokens": 385889.0
+ },
+ {
+  "model": "Qwen3.7 Plus",
+  "mode": "foveal",
+  "n": 10,
+  "success": 0.8,
+  "cost": 0.0293673088,
+  "image_tokens": 16128.4
+ }
+]

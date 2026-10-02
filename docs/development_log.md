@@ -1,4 +1,6 @@
-# foveal roadmap
+# foveal development log
+
+How foveal was built, in five gated phases. The README describes the result.
 
 The plan is 5 gated phases over about 14 part-time weeks. Each phase ends with a gate: a
 measured result that decides whether the next phase is worth building. Gate thresholds are
@@ -98,7 +100,7 @@ Goal: consecutive screenshots and video frames cost only what changed.
 - [x] `foveal.diff`: tile-based change detection that tolerates JPEG noise, vertical-scroll
   detection, merged change boxes, reconstruction and a text description
 - [x] Offline replay on Multimodal-Mind2Web (2 Oct 2026, $0, no model calls): 113 web-agent
-  trajectories, 725 steps, 1280x720 viewports. See `docs/phase2_replay_mind2web.md`.
+  trajectories, 725 steps, 1280x720 viewports. See `docs/results/screens_mind2web.md`.
   - Lossless: reconstructed frames are pixel-exact, and so is every action target (579 of 579).
   - Tokens: foveal_diff, with the same information as full history, is -21% vs full history.
     foveal_window3 is -15% vs keep-last-3. **The token gate (-50% vs keep-last-3) is not met

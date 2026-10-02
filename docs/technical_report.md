@@ -1,7 +1,7 @@
 # foveal: perceive-once working memory for multimodal agents
 
-*Technical report draft, 2 October 2026. Every number here comes from the logs and replays
-in this repository. Runs still waiting for budget are listed at the end.*
+*Technical report draft, 3 October 2026. Every number here comes from the logs and replays
+in this repository. Runs not yet done are listed at the end.*
 
 ## Summary
 
@@ -13,8 +13,10 @@ and shares facts across agents with region-level invalidation.
 
 On long-document QA with Claude Sonnet 5.5, an orchestrator and reader sub-agents re-sent
 images heavily: **62% of image tokens were repeats**. Replacing raw pages with foveal's
-levels (caption and text by default, pixels only through `look()`) kept success the same
-under one judge (11/16 vs 10/16) and cut **image tokens by 93% and cost by 66%**. On recorded
+levels (caption and text by default, pixels only through `look()`) kept accuracy equal
+(10/16 vs 10/16) and cut **image tokens by 93% and cost by 66%**. On Qwen3.7 Plus (via
+OpenRouter) foveal cut image tokens 96% and cost 56%, but accuracy fell from 10/10 to
+8/10: that model leaned on text where it should have looked at the figure. On recorded
 screen streams, diff sync with append-only history cut cost **23–43% against full history**.
 On web tasks it was about **half the cost of keep-last-3**, because sliding windows defeat
 prompt caching.
@@ -67,21 +69,45 @@ that the assembler's cost model has to justify.
 
 ## 3. Results
 
-### 3.1 Document QA (same 16 questions)
+### 3.1 Document QA
 
-Success is judged by Claude Haiku 4.5, applied identically to every run. The rule-based
-scorer missed correct paraphrases such as "the document mentions no cooler" for a "Not
-answerable" gold answer.
+**Scoring.** One procedure scores every run. Claude Haiku 4.5 judges each answer. Wherever
+its verdict disagrees with the rule-based scorer, Claude Sonnet 5.5 decides. Rules alone
+miss correct paraphrases, such as "the document mentions no cooler" for a "Not answerable"
+gold answer. Haiku alone once rejected an answer nearly identical to one it had accepted.
+Comparisons use only questions answered in both modes, and costs include each document's
+one-off captioning, shared across its questions.
 
-| Configuration | Success | Image tokens | Cost incl. captions |
+**Claude Sonnet 5.5, 16 questions:**
+
+| Configuration | Correct | Image tokens | Cost incl. captions |
 | --- | --- | --- | --- |
 | Full page images (baseline) | 10/16 | 2.50M | $4.06 |
-| foveal memory, captions from full pages | 10/16 | 389K | $1.53 |
-| foveal memory, 384-token caption images | 11/16 | 183K (61K are one-off captions) | **$1.40** |
+| foveal memory, captions from full pages | 9/16 | 389K | $1.53 |
+| foveal memory, 384-token caption images | **10/16** | 183K (61K are one-off captions) | **$1.40** |
 
-![Cost vs success](cost_vs_success.png)
+An earlier draft of this report gave the last row as 11/16. That was before the tie-break
+was added; with it, one of those answers is wrong.
 
-**Where the money goes now.** Captioning costs about $0.002 per page, once. Images are
+**Qwen3.7 Plus via OpenRouter, the 10 questions both modes answered** (the baseline hit its
+spending cap after 10):
+
+| Configuration | Correct | Image tokens | Cost incl. captions |
+| --- | --- | --- | --- |
+| Full page images (baseline) | 10/10 | 3.86M | $0.66 |
+| foveal memory | 8/10 | 161K (33K are one-off captions) | **$0.29** |
+
+![Cost and image tokens per question, both models](figures/docqa-light.png)
+
+**Qwen's two misses** were a URL count (29 against a gold of 30) and a question about a
+figure that the document can't answer, where it said "0" instead of "Not answerable". In
+both, it reasoned from captions and the text layer instead of calling `look()`, so foveal
+needs to promote images more readily for models that under-use tools. Two other Qwen
+points matter for cost. Qwen's prompt cache barely hit (0% on full pages, about 35% in
+memory mode, against about 74% for Sonnet), so re-sent history was billed in full.
+Qwen also took about twice as long per question (41 s median against 22 s).
+
+**Where the money goes now (Sonnet 5.5).** Captioning costs about $0.0006 per page, once ($0.00015 with Qwen). Images are
 $0.17. The largest line is text, $0.80: captions, text layers and conversation history
 re-sent on every agent call. Showing only a text preview, with full text on request, did
 not help. Agents fetched the full text anyway, which added 15 calls. That's a lesson for
@@ -112,16 +138,15 @@ input for context management, not an afterthought.
   `look()` more heavily, and that slice is a pending run.
 - The screen results are offline. A live web-agent accuracy check under each policy is
   built but not yet run. The stale-action rate needs a live screen loop.
-- One model family (Claude). The middleware handles OpenAI-format messages, but no
-  cross-provider run exists yet.
+- Two model families so far: Claude and Qwen, through OpenRouter.
 
-## 5. Pending runs (built, waiting for budget)
+## 5. Not yet run
 
-| Run | Purpose | Cap |
-| --- | --- | --- |
-| `p1-scale` | 24 fresh figure, table and chart questions, full pages vs memory | $14 |
-| `p2-live` | Mind2Web next-action accuracy: full history vs keep-last-3 vs foveal diffs | $5 |
-| `p3-facts` | Same 16 questions with shared notes across questions | $3 |
+| Run | Purpose |
+| --- | --- |
+| Figure/table/chart slice, foveal memory | The full-page baseline on 8 fresh figure-heavy questions is done (Qwen); the memory side is not |
+| Shared notes across questions | Same questions with `--facts`, to test reuse of earlier answers |
+| Mind2Web next-action accuracy | Full history vs keep-last-3 vs foveal diffs, live |
 
-`uv run python -m bench.suite --run <name> --budget <usd>` runs them. The suite refuses any
-set of runs whose caps exceed the budget.
+Each can be run with `bench.mmlongbench.run` / `bench.replay.agent_eval` under a
+`--max-cost-usd` cap.

@@ -1,62 +1,129 @@
 # foveal
 
-Multimodal working memory for agents: perceive each image once, keep cheap references in
-context, zoom into detail only when needed, and share what was learned across sub-agents.
+**Working memory for multimodal agents: perceive each image once, keep cheap references in
+context, zoom into detail only when needed.**
 
-> Status: **Phase 0 (measurement).** The memory layer isn't built yet. This repo currently
-> measures how many image tokens agent harnesses spend re-sending pixels they already sent.
+Agent harnesses pay for the same pixels again and again. Every earlier image is re-sent on
+every model call, sub-agents re-read pages another agent already read, and old screenshots
+stay in context with nothing marking them outdated. foveal is a model-agnostic layer that
+stores each visual input once and sends a model only what it needs: a caption and the text
+first, pixels on request, and for screens, only what changed.
 
-## Phase 0 result
+## Results
 
-On 16 MMLongBench-Doc questions answered by Claude Sonnet 5.5 (an orchestrator plus reader
-sub-agents), **62.3% of all image tokens were pages already sent earlier in the same task**.
-That passes the 40% gate. Prompt caching already served about 74% of those repeats. See
-[ROADMAP.md](ROADMAP.md) for the full numbers.
+### Long-document QA
 
-![Cumulative image tokens per model call](docs/phase0_cumulative_image_tokens.png)
+MMLongBench-Doc: 4 documents of 28–60 pages, an orchestrator with reader sub-agents. Each
+model answers the same questions in both modes, and one judge scores every answer.
 
-## Memory (Phase 1)
+| Model | Mode | Correct | Image tokens / question | Cost / question |
+| --- | --- | --- | --- | --- |
+| Claude Sonnet 5.5 (16 questions) | full page images | 10/16 | 156K | $0.254 |
+| | **foveal memory** | **10/16** | **11K (-93%)** | **$0.088 (-66%)** |
+| Qwen3.7 Plus via OpenRouter (10 questions) | full page images | 10/10 | 386K | $0.066 |
+| | **foveal memory** | **8/10** | **16K (-96%)** | **$0.029 (-56%)** |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/docqa-dark.png">
+  <img alt="Cost and image tokens per question, full page images vs foveal memory, for Claude Sonnet 5.5 and Qwen3.7 Plus" src="docs/figures/docqa-light.png">
+</picture>
+
+Cost per question includes foveal's one-off captioning: about $0.0006 per page with Claude
+Haiku 4.5, or $0.00015 with Qwen.
+
+### Screenshot history (offline replay, no model calls)
+
+Estimated cost of sending screenshot history to Claude Sonnet 5.5 under each policy. Prompt
+caching is applied wherever the policy keeps a stable prefix.
+
+| Workload | All screenshots | Last 3 only | **foveal diffs, all history kept** |
+| --- | --- | --- | --- |
+| Web agent: 113 Mind2Web trajectories, 725 steps | $2.81 | $4.39 | **$2.16** |
+| Screen recordings, one frame every 2 s (507 frames) | $4.23 | $2.80 | **$2.42** |
+| Screen recordings, one frame every 5 s (205 frames) | $0.96 | $1.10 | **$0.74** |
+
+Every reconstructed frame was pixel-exact on Mind2Web, including the element each action
+targeted (579 of 579). On compressed video, at most 0.27% of pixels were off.
+
+### What we learned
+
+- **Most image tokens are repeats.** Without foveal, 62% of image tokens in the doc-QA
+  harness were pixels already sent earlier in the same question (86% on Qwen). Of the pages
+  "seen for the first time", 65% had already been read for an earlier question on the same
+  document.
+- **Perceive once, pay a fraction.** Captions and text layers answer many questions, and
+  `look()` fetches pixels when they're needed. Image tokens fell 93–96% on both models.
+- **The accuracy cost depends on the model.** Claude Sonnet 5.5 kept full accuracy. Qwen3.7
+  Plus lost 2 of 10. On a URL count and a figure question it trusted the text instead of
+  calling `look()`, so weaker tool users may need foveal to promote images more readily.
+- **Keeping only the last N screenshots defeats prompt caching.** The sliding window changes
+  the prompt prefix every step, so on web tasks it costs *more* than sending everything.
+  foveal's append-only diffs keep all the information for about half the cost of keep-last-3.
+- **Once pixels are cheap, agent overhead dominates.** In foveal mode most of the remaining
+  cost is text (captions, page text and conversation history re-sent on every call), not
+  images.
+
+Full write-up: [docs/technical_report.md](docs/technical_report.md). Per-question details are
+in [docs/results/](docs/results/).
+
+## Features
+
+- **Perceive-once asset store.** Images, PDF pages and screenshots are stored once by
+  content hash, in SQLite plus files on disk.
+- **Representation levels.** **L0** a one-line caption, **L1** the text layer or OCR, **L2**
+  a thumbnail of at most about 256 tokens, **L3** full detail. PDF regions are re-rendered
+  at higher resolution, so zooming in gains real detail.
+- **`look(asset, region, detail)`** pages pixels in on demand.
+- **Diff sync for screens.** Change detection that tolerates JPEG noise, scroll detection
+  that works under sticky headers, versioned streams (`ingest_frame`), and
+  `diff_since(source, version)`.
+- **Shared facts with provenance.** `write_fact`, `recall_facts` and `verify_fact`, with
+  region-aware invalidation: a fact goes stale only when its region changes, and moves
+  with scrolling.
+- **Subscriptions.** Agents are notified when a screen area changes, through SQLite (shared
+  across processes) or Redis (shared across machines).
+- **Budget- and cache-aware context assembly.** The assembler demotes old images only when
+  the cache rewrite pays for itself.
+- **Drop-in middleware.** `foveal.wrap(client, memory)` works with Anthropic- and
+  OpenAI-format clients. Its rewrites are prefix-stable, so prompt caching keeps working.
+- **MCP server.** `foveal-mcp` gives any MCP client (Claude Code, IDEs, custom agents) the
+  memory as tools.
+- **Instrumentation.** A pass-through client logs every image's hash, size and token cost,
+  plus call usage, and reports re-perception.
+
+## Install
+
+```sh
+git clone https://github.com/shubh-tiwari/foveal && cd foveal
+uv sync --all-extras          # or: pip install -e ".[anthropic,pdf,mcp,redis,ocr,video]"
+```
+
+Python 3.10+.
+
+## Quick start
+
+**Memory: store once, read cheaply, zoom on demand**
 
 ```python
 import anthropic
 from foveal import Captioner, Memory
 
-mem = Memory(".foveal", captioner=Captioner(anthropic.Anthropic()))  # L0 via Claude Haiku 4.5
-pages = mem.ingest("report.pdf")  # each page perceived once, deduplicated by content hash
-print(mem.describe(pages[3].asset_id))  # L0 caption + L1 text layer: no image tokens
-glimpse = mem.look(pages[3].asset_id)  # L2: about 256 tokens
+mem = Memory(".foveal", captioner=Captioner(anthropic.Anthropic()))  # captions via Claude Haiku 4.5
+pages = mem.ingest("report.pdf")  # each page perceived once
+print(mem.describe(pages[3].asset_id))  # caption + text layer, no image tokens
 chart = mem.look(pages[3].asset_id, region=(0.1, 0.45, 0.9, 0.8), detail="full")
 chart.block()  # an Anthropic image block
 ```
 
-| Level | Contents | Cost |
-| --- | --- | --- |
-| L0 | One-line caption, cached by hash | A few dozen text tokens |
-| L1 | PDF text layer, or OCR with the `ocr` extra | Text only |
-| L2 | Thumbnail | At most about 256 image tokens |
-| L3 | Full page, or a region re-rendered from the PDF at higher resolution | Full image cost |
+**Screens: versions and diffs**
 
-**Phase 1 result:** on the same 16 questions, memory mode matched the full-image baseline. Both
-scored 10/16, with every task getting the same verdict. Image tokens fell 84% (95% at task
-time), and cost fell from $4.06 to $1.53 including captions.
-
-The benchmark compares this against sending full pages:
-
-```sh
-uv run python -m bench.mmlongbench.run --mode memory --docs 4 --per-doc 4
-uv run foveal compare runs/<baseline>.jsonl runs/<memory>.jsonl
+```python
+mem.ingest_frame(screenshot_png, source="tab:checkout")  # version 1
+mem.ingest_frame(next_png, source="tab:checkout")  # version 2, with its diff
+mem.diff_since("tab:checkout", 1).blocks()  # "scrolled down 250px, except ..." + crops
 ```
 
-## Diff sync (Phase 2, offline replay)
-
-`foveal.diff.diff_frames(prev, curr)` returns identical, partial (changed boxes, plus any
-scroll) or full. On 113 recorded web-agent trajectories, sending only the diffs while keeping
-history append-only cost **51% less than keep-last-3** and 23% less than full history. It
-kept every frame's information, and every reconstruction was pixel-exact. Token savings are
-smaller (-21%), because web tasks change pages often. See
-[docs/phase2_replay_mind2web.md](docs/phase2_replay_mind2web.md).
-
-## Shared facts (Phase 3)
+**Shared facts and change notifications**
 
 ```python
 f = mem.write_fact(
@@ -66,102 +133,67 @@ f = mem.write_fact(
     author="reader-1",
     source="tab:checkout",
 )
-mem.recall_facts("what is the order total?")  # fresh facts, best first, with provenance
-mem.verify_fact(f.fact_id)  # zoom into the cited region
+mem.recall_facts("what is the order total?")  # fresh facts, with provenance
 mem.subscribe("orch", "tab:checkout", region=(100, 400, 300, 40))
-mem.ingest_frame(new_screenshot, "tab:checkout")  # facts whose region changed become stale
-mem.poll("reader-1")  # -> [Event(kind="stale", ...)]
+mem.poll("orch")  # change / stale-fact events
 ```
 
-Facts live in the store's SQLite file by default. `Memory(facts=RedisFacts(url))` shares them
+**Middleware: no code changes in your agent loop**
+
+```python
+import foveal
+
+client = foveal.wrap(anthropic.Anthropic(), mem)  # or foveal.wrap(openai_client, mem, fmt="openai")
+client.messages.create(model="claude-sonnet-5-5", max_tokens=4096, messages=history)
+client.last_stats.saved  # image tokens not re-sent on this call
+```
+
+**MCP server**
+
+```sh
+claude mcp add foveal -- uv run --directory /path/to/foveal foveal-mcp --store ~/.foveal
+```
+
+Its tools are `ingest`, `ingest_frame`, `describe`, `look`, `diff_since`, `recall_facts`,
+`write_fact`, `verify_fact`, `subscribe` and `poll`. Use `--redis-url` to share facts
 across machines.
 
-## Drop-in middleware and MCP server (Phase 4)
+## Reproduce
 
-```python
-import anthropic, foveal
-
-mem = foveal.Memory(".foveal")
-client = foveal.wrap(anthropic.Anthropic(), mem)  # or wrap(openai_client, mem, fmt="openai")
-client.messages.create(model="claude-sonnet-5-5", messages=history, max_tokens=4096)
-client.last_stats.saved  # image tokens not sent this call
-```
-
-The wrapper sends each repeated image once and turns a new screenshot from the same tool
-into a diff. Each rewrite depends only on earlier messages, so the history stays
-byte-stable across calls, and prompt caching and preserved thinking keep working.
-`foveal.middleware.LOOK_TOOL` lets the model page any image back in at full detail.
+API keys are read from `.env`: `ANTHROPIC_API_KEY`, and `OPENROUTER_API_KEY` for other models.
 
 ```sh
-foveal-mcp --store .foveal        # MCP server: ingest, look, diff_since, facts, subscribe, poll
+# Doc QA: full pages vs foveal memory (add --provider openrouter --orch-model ... for other models)
+uv run python -m bench.mmlongbench.run --docs 4 --per-doc 4 --run-id base
+uv run python -m bench.mmlongbench.run --docs 4 --per-doc 4 --run-id fov --mode memory
+uv run foveal compare runs/base.jsonl runs/fov.jsonl --judge
+
+# Screen replays ($0, no model calls)
+uv run python -m bench.replay.simulate --shards 2
+uv run python -m bench.replay.simulate --source video --every-s 2
+
+# Free dry runs of every evaluation, then the figures
+uv run python -m bench.suite --dry-run
+uv run python -m bench.figures --judge
 ```
 
-To add it to Claude Code: `claude mcp add foveal -- uv run --directory /path/to/foveal foveal-mcp`
+Every live run takes `--max-cost-usd` and stops when its logged cost reaches it. The suite
+refuses to start runs whose caps add up to more than `--budget`.
 
-`foveal.Assembler` builds a context under a token budget. It picks a level for each asset
-by relevance and recency. Its `CacheModel` demotes old images only when the one-off cache
-rewrite pays for itself over the calls that remain.
+## Limitations and next steps
 
-## Evaluation
+- The samples are small: 16 and 10 doc-QA questions, where one question moves accuracy by
+  6–10 points.
+- The screen results come from offline replay. A live web-agent accuracy run (Mind2Web
+  next-action prediction under each history policy) is built but not yet run.
+- Next:
+  - Run foveal memory on the 8-question figure/table/chart set (its full-page baseline is
+    done).
+  - Run the shared-notes mode across questions.
+  - Auto-promote images for models that under-use `look()`.
 
-```sh
-uv run python -m bench.suite --report --judge   # report + cost/success chart from existing logs
-uv run python -m bench.suite --dry-run          # every evaluation with fake clients ($0)
-uv run python -m bench.suite --run p3-facts --budget 3
-```
+The development history is in [docs/development_log.md](docs/development_log.md).
 
-To run the benchmark on any OpenRouter model, set `OPENROUTER_API_KEY` and pass
-`--provider openrouter --orch-model google/gemini-3.8-flash --reader-model google/gemini-3.8-flash`.
+## License
 
-The full write-up is [docs/technical_report.md](docs/technical_report.md).
-
-## Phase 0: measure re-perception
-
-`foveal.instrument` wraps the Anthropic client without changing any request. It logs every
-image block in every call (sha256, pHash, size, token cost, position) together with `usage`,
-and writes one JSONL line per call:
-
-```python
-import anthropic
-from foveal.instrument import InstrumentedAnthropic, JsonlSink, TokenCounter, Tracer
-
-raw = anthropic.Anthropic()
-tracer = Tracer("run1", JsonlSink("runs/run1.jsonl"), TokenCounter(raw))
-client = InstrumentedAnthropic(raw, tracer)
-with tracer.scope(task_id="q1", agent_id="orch"):
-    client.messages.create(...)
-```
-
-The test harness is a long-document QA orchestrator with reader sub-agents, run on
-[MMLongBench-Doc](https://huggingface.co/datasets/yubo2333/MMLongBench-Doc):
-
-```sh
-uv sync --all-extras
-uv run python -m bench.mmlongbench.run --dry-run                   # offline, free
-uv run python -m bench.mmlongbench.run --docs 1 --per-doc 1        # one live task
-uv run python -m bench.mmlongbench.run --docs 4 --per-doc 4 --max-cost-usd 6
-uv run foveal analyze runs/<run_id>.jsonl                          # report.md + plot
-```
-
-The default model is Claude Sonnet 5.5 (`claude-sonnet-5-5`) for both the orchestrator and the
-readers. Use `--orch-model` and `--reader-model` to change them. For example,
-`--reader-model claude-haiku-4-5` sends reader pages at standard resolution for less.
-
-The report covers:
-
-- **Re-perception rate:** the share of image tokens whose exact image was already sent in
-  the same task. It is split into same-agent resends and cross-agent duplicates.
-- **Near-duplicate and cross-task shares:** how much of the first-seen traffic a memory
-  layer could still reuse.
-- **Image tokens under keep-last-3:** the common workaround, simulated from the same logs.
-- **Cache-adjusted cost:** how much of the repeated traffic prompt caching already discounts.
-- **Gate:** PASS when re-perception is at least 40%.
-
-Image token estimates follow the Vision docs: `⌈w/28⌉·⌈h/28⌉` after downscaling to the
-model's tier limits. Ground truth comes from `messages.count_tokens`, cached per image hash.
-
-## Roadmap
-
-Phase 0 (measure) is in progress. Phases 1–4 build the asset store and L0–L3 ladder, diff
-sync, shared facts, and the budget-aware assembler with MCP and SDK interfaces. See
-[ROADMAP.md](ROADMAP.md) for each phase's scope and gate.
+MIT
