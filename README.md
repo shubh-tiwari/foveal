@@ -47,6 +47,15 @@ uv run python -m bench.mmlongbench.run --mode memory --docs 4 --per-doc 4
 uv run foveal compare runs/<baseline>.jsonl runs/<memory>.jsonl
 ```
 
+## Diff sync (Phase 2, offline replay)
+
+`foveal.diff.diff_frames(prev, curr)` returns identical, partial (changed boxes, plus any
+scroll) or full. On 113 recorded web-agent trajectories, sending only the diffs while keeping
+history append-only cost **51% less than keep-last-3** and 23% less than full history. It
+kept every frame's information, and every reconstruction was pixel-exact. Token savings are
+smaller (-21%), because web tasks change pages often. See
+[docs/phase2_replay_mind2web.md](docs/phase2_replay_mind2web.md).
+
 ## Phase 0: measure re-perception
 
 `foveal.instrument` wraps the Anthropic client without changing any request. It logs every
