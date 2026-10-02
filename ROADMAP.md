@@ -58,7 +58,25 @@ Goal: perceive each input once, and keep only cheap representations in context.
     documents need OCR for L1, and figure-heavy questions lean harder on `look()`.
   - The rule-based scorer alone gives 9 vs 10. Its miss was a correct "the document mentions
     no cooler" answer to a "Not answerable" question, so the LLM judge is the reported score.
-- [ ] Scale up: all 135 documents (or a stratified 40), plus a scanned/figure-heavy slice
+- [x] Cost tuning (2 Oct 2026, $1.40 run). Captioning from a 384-token downscale cut caption
+  cost 66% ($0.29 → $0.10) with no accuracy loss, and is now the default. Text-on-demand
+  saved nothing: agents fetched the full text for most pages anyway, adding 15 calls. It
+  stays available as `--text-on-demand`, off by default.
+  - Against the full-image baseline: success 11/16 vs 10/16 (same judge), -93% image tokens,
+    -66% cost ($4.06 → $1.40).
+  - The remaining cost is mostly agent overhead: every call re-sends the system prompt, tool
+    definitions and history. Caption cost is $0.002 per page.
+- [x] OCR fallback for scanned pages (Tesseract, only for new pages with almost no text layer)
+- [x] Task slices: `--evidence Chart,Table,Figure`, `--scanned-only`,
+  `--exclude-docs-from <run>` (fresh documents)
+- [ ] **Scale-up run (needs budget approval, ~$8–14):** a fresh figure-heavy slice in both
+  modes, then the judged compare:
+  ```sh
+  X="--docs 8 --per-doc 3 --evidence Chart,Table,Figure --exclude-docs-from runs/phase0-sonnet55.jsonl --max-cost-usd 8"
+  uv run python -m bench.mmlongbench.run $X --run-id p1-scale-images
+  uv run python -m bench.mmlongbench.run $X --run-id p1-scale-memory --mode memory --store .foveal
+  uv run foveal compare runs/p1-scale-images.jsonl runs/p1-scale-memory.jsonl --judge
+  ```
 - Known limit: images returned by `look()` stay in history and are resent. Dropping them means
   editing earlier turns, which breaks the prompt cache and invalidates preserved thinking.
   That belongs to the Phase 4 assembler.

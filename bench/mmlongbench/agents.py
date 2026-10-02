@@ -132,9 +132,17 @@ photos and visual layout are NOT in the text layer: call look(page, detail, regi
 them. Use a glimpse to find where something is on a page, then look at that region with \
 detail='full' to read it."""
 
+MEMORY_NOTE_ON_DEMAND = """
+
+Pages are first shown as a short caption and a text preview, not as images. Call \
+view_pages(pages) to read a page's full text layer when the preview is not enough. Charts, \
+figures, photos and visual layout are NOT in the text layer: call look(page, detail, region) \
+to see them. Use a glimpse to find where something is on a page, then look at that region \
+with detail='full' to read it."""
+
 VIEW_PAGES_MEMORY = {
     **ORCH_TOOLS[1],
-    "description": "Read pages' captions and text layers (no images; use look for visuals).",
+    "description": "Read pages' captions and full text layers (no images; use look for visuals).",
 }
 
 
@@ -163,14 +171,15 @@ class DocQA:
     def _tools(doc: PageRenderer, role: str) -> tuple[str, list]:
         if doc.images:
             return (ORCH_SYSTEM, ORCH_TOOLS) if role == "orch" else (READER_SYSTEM, READER_TOOLS)
+        note = MEMORY_NOTE_ON_DEMAND if getattr(doc, "text_on_demand", False) else MEMORY_NOTE
         if role == "orch":
-            return ORCH_SYSTEM + MEMORY_NOTE, [
+            return ORCH_SYSTEM + note, [
                 ORCH_TOOLS[0],
                 VIEW_PAGES_MEMORY,
                 LOOK_TOOL,
                 ORCH_TOOLS[2],
             ]
-        return READER_SYSTEM + MEMORY_NOTE, [VIEW_PAGES_MEMORY, LOOK_TOOL]
+        return READER_SYSTEM + note, [VIEW_PAGES_MEMORY, LOOK_TOOL]
 
     def _page_tool(self, doc: PageRenderer, u: Any) -> dict:
         """Result for view_pages / look tool calls (shared by both roles)."""
@@ -196,7 +205,7 @@ class DocQA:
         pg, err = self._valid_pages(u.input.get("pages"), doc.page_count)
         if err:
             return {"type": "tool_result", "tool_use_id": u.id, "content": err, "is_error": True}
-        return {"type": "tool_result", "tool_use_id": u.id, "content": doc.page_blocks(pg)}
+        return {"type": "tool_result", "tool_use_id": u.id, "content": doc.read_blocks(pg)}
 
     # -- model call -------------------------------------------------------
 

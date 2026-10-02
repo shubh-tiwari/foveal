@@ -75,18 +75,44 @@ class PageRenderer:
             blocks.append(self.image_block(p))
         return blocks
 
+    def read_blocks(self, pages: list[int]) -> list[dict]:
+        """What view_pages returns."""
+        return self.page_blocks(pages)
+
 
 class MemoryPages(PageRenderer):
     """Same document, served from a foveal Memory: text levels by default, pixels on demand."""
 
     images = False
 
-    def __init__(self, pdf: Path, memory: Memory, **kw: Any):
+    PREVIEW_CHARS = 300
+
+    def __init__(self, pdf: Path, memory: Memory, text_on_demand: bool = False, **kw: Any):
         super().__init__(pdf, **kw)
         self.memory = memory
+        self.text_on_demand = text_on_demand
         self.assets = memory.ingest_pdf(pdf, dpi=self.dpi)
 
+    def _preview(self, p: int) -> str:
+        a = self.assets[p - 1]
+        text = " ".join((a.text or "").split())
+        head = self.memory.describe(a.asset_id, levels=("L0",))
+        if not text:
+            return f"Page {p} {head}\nText layer: (no text)"
+        more = (
+            f" [...{len(text) - self.PREVIEW_CHARS} more chars: view_pages for full text]"
+            if len(text) > self.PREVIEW_CHARS
+            else ""
+        )
+        return f"Page {p} {head}\nText preview: {text[: self.PREVIEW_CHARS]}{more}"
+
     def page_blocks(self, pages: list[int]) -> list[dict]:
+        """Initial view of pages: captions + full text, or + a short preview (on demand)."""
+        if self.text_on_demand:
+            return [{"type": "text", "text": "\n\n".join(self._preview(p) for p in pages)}]
+        return self.read_blocks(pages)
+
+    def read_blocks(self, pages: list[int]) -> list[dict]:
         text = "\n\n".join(
             f"Page {p} {self.memory.describe(self.assets[p - 1].asset_id)}" for p in pages
         )

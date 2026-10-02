@@ -27,6 +27,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--min-pages", type=int, default=10)
     ap.add_argument("--max-pages", type=int, default=60)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument(
+        "--evidence",
+        default=None,
+        help="comma list of evidence types to keep, e.g. Chart,Table,Figure",
+    )
+    ap.add_argument(
+        "--scanned-only", action="store_true", help="only documents with (almost) no text layer"
+    )
+    ap.add_argument(
+        "--exclude-docs-from",
+        default=None,
+        help="run log whose documents to skip (fresh tasks for a scale-up)",
+    )
     ap.add_argument("--orch-model", default="claude-sonnet-5-5")
     ap.add_argument("--reader-model", default="claude-sonnet-5-5")
     ap.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"])
@@ -48,6 +61,17 @@ def main(argv: list[str] | None = None) -> int:
         help="images: full page images (baseline); memory: foveal L0/L1 + look()",
     )
     ap.add_argument("--caption-model", default="claude-haiku-4-5")
+    ap.add_argument(
+        "--caption-image-tokens",
+        type=int,
+        default=384,
+        help="downscale pages to this many visual tokens before captioning (0 = full page)",
+    )
+    ap.add_argument(
+        "--text-on-demand",
+        action="store_true",
+        help="memory mode: show caption + text preview; full text via view_pages",
+    )
     ap.add_argument("--store", default=None, help="foveal store dir (default .foveal[-dry])")
     ap.add_argument("--dry-run", action="store_true", help="fake client + synthetic PDFs")
     args = ap.parse_args(argv)
@@ -70,7 +94,25 @@ def main(argv: list[str] | None = None) -> int:
 
         load_dotenv()  # ANTHROPIC_API_KEY from .env (never printed)
         raw = anthropic.Anthropic()
-        tasks = select_tasks(args.docs, args.per_doc, args.min_pages, args.max_pages, args.seed)
+        exclude = None
+        if args.exclude_docs_from:
+            from foveal.instrument.records import read_jsonl
+
+            exclude = {
+                r["doc_id"]
+                for r in read_jsonl(args.exclude_docs_from)
+                if r.get("type") == "task" and r.get("doc_id")
+            }
+        tasks = select_tasks(
+            args.docs,
+            args.per_doc,
+            args.min_pages,
+            args.max_pages,
+            args.seed,
+            evidence=set(args.evidence.split(",")) if args.evidence else None,
+            scanned_only=args.scanned_only,
+            exclude_docs=exclude,
+        )
 
     counter = (
         None
@@ -98,7 +140,9 @@ def main(argv: list[str] | None = None) -> int:
         store = args.store or (".foveal-dry" if args.dry_run else ".foveal")
         memory = Memory(
             store,
-            captioner=Captioner(client, model=args.caption_model),
+            captioner=Captioner(
+                client, model=args.caption_model, image_tokens=args.caption_image_tokens or None
+            ),
             model=args.reader_model,
             long_edge=args.long_edge,
         )
@@ -111,7 +155,12 @@ def main(argv: list[str] | None = None) -> int:
                 renderers[t.doc_id] = PageRenderer(t.pdf_path, long_edge=args.long_edge)
             else:  # perceive every page once, up front; captions are logged as "ingest"
                 with tracer.scope(task_id=f"ingest:{t.doc_id}", agent_id="ingest", doc_id=t.doc_id):
-                    renderers[t.doc_id] = MemoryPages(t.pdf_path, memory, long_edge=args.long_edge)
+                    renderers[t.doc_id] = MemoryPages(
+                        t.pdf_path,
+                        memory,
+                        text_on_demand=args.text_on_demand,
+                        long_edge=args.long_edge,
+                    )
         return renderers[t.doc_id]
 
     print(f"run {run_id} ({args.mode}): {len(tasks)} tasks -> {log}")

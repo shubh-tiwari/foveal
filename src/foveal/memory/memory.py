@@ -41,12 +41,21 @@ class Captioner:
     """L0 captions from a cheap vision model. Calls go through whatever client is passed,
     so an InstrumentedAnthropic client logs (and bills) them like any other call."""
 
-    def __init__(self, client: Any, model: str = "claude-haiku-4-5", max_tokens: int = 120):
+    def __init__(
+        self,
+        client: Any,
+        model: str = "claude-haiku-4-5",
+        max_tokens: int = 120,
+        image_tokens: int | None = 384,
+    ):
         self.client = client
         self.model = model
         self.max_tokens = max_tokens
+        self.image_tokens = image_tokens  # downscale pages to this many visual tokens first
 
     def __call__(self, jpeg: bytes) -> str:
+        if self.image_tokens:
+            jpeg = thumbnail(jpeg, self.image_tokens, quality=85)
         block = {
             "type": "image",
             "source": {
@@ -120,6 +129,10 @@ class Memory:
                 self.store.update_levels(existing.asset_id, L0=self.captioner(l3))
                 existing = self.store.get(asset.asset_id)
             return existing
+        if asset.levels.pop("L1_needs_ocr", False):  # scanned page: OCR once, at first sight
+            text = ocr(l3)
+            if text and len(text) > len(asset.levels.get("L1") or ""):
+                asset.levels["L1"], asset.levels["L1_source"] = text, "ocr"
         asset.levels["L3"] = str(self.store.write_blob(asset.asset_id, l3))
         l2 = thumbnail(l3, self.glimpse_tokens)
         asset.levels["L2"] = str(self.store.write_blob(asset.asset_id + "_l2", l2))
@@ -157,8 +170,12 @@ class Memory:
             self._pdfs[path] = pymupdf.open(path)
         return self._pdfs[path]
 
-    def ingest_pdf(self, path: str | Path, dpi: int = 144, workers: int = 8) -> list[Asset]:
-        """One `page` asset per page. L1 is the PDF text layer; crops re-render from the PDF."""
+    def ingest_pdf(
+        self, path: str | Path, dpi: int = 144, workers: int = 8, min_text_chars: int = 40
+    ) -> list[Asset]:
+        """One `page` asset per page. L1 is the PDF text layer, or OCR when a page has
+        almost no text layer (scanned pages) and the `ocr` extra is installed. Crops
+        re-render from the PDF."""
         path = str(Path(path).resolve())
         doc = self._pdf(path)
         rendered = []
@@ -174,7 +191,11 @@ class Memory:
                         source=f"{path}#page={n}",
                         width=w,
                         height=h,
-                        levels={"L1": text},
+                        levels={
+                            "L1": text,
+                            "L1_source": "pdf",
+                            **({"L1_needs_ocr": True} if len(text) < min_text_chars else {}),
+                        },
                         origin={"pdf": path, "page": n, "dpi": dpi},
                     ),
                     l3,

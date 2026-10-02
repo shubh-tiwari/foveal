@@ -56,3 +56,25 @@ def test_describe_and_image_ingest(tmp_path, png_factory):
 def test_fit_to_tokens():
     w, h = fit_to_tokens(1109, 1568, 256)
     assert -(-w // 28) * -(-h // 28) <= 256 and w / h == pytest.approx(1109 / 1568, rel=0.03)
+
+
+def test_scanned_page_gets_ocr_text(tmp_path):
+    import io
+
+    import pymupdf
+    from PIL import Image, ImageDraw, ImageFont
+
+    pytest.importorskip("pytesseract")
+    im = Image.new("RGB", (1200, 400), "white")
+    font = ImageFont.load_default(size=48)
+    ImageDraw.Draw(im).text((40, 150), "Quarterly revenue was 4200", fill="black", font=font)
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    doc = pymupdf.open()
+    page = doc.new_page(width=600, height=200)
+    page.insert_image(page.rect, stream=buf.getvalue())  # image only: no text layer
+    pdf = tmp_path / "scan.pdf"
+    doc.save(pdf)
+    a = Memory(tmp_path / "store").ingest_pdf(pdf)[0]
+    assert a.levels["L1_source"] == "ocr"
+    assert "4200" in a.text and "revenue" in a.text.lower()

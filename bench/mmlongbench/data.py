@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,13 +48,44 @@ def page_count(pdf: Path) -> int:
         return doc.page_count
 
 
+def text_chars_per_page(pdf: Path) -> float:
+    """Average text-layer characters per page; near zero means a scanned document."""
+    import pymupdf as fitz
+
+    with fitz.open(pdf) as doc:
+        return sum(len(p.get_text().strip()) for p in doc) / max(1, doc.page_count)
+
+
+def _evidence(r: dict) -> set[str]:
+    try:
+        return {s.split(" ")[0] for s in ast.literal_eval(r["evidence_sources"] or "[]")}
+    except (ValueError, SyntaxError):
+        return set()
+
+
 def select_tasks(
-    n_docs: int, per_doc: int, min_pages: int = 10, max_pages: int = 60, seed: int = 0
+    n_docs: int,
+    per_doc: int,
+    min_pages: int = 10,
+    max_pages: int = 60,
+    seed: int = 0,
+    evidence: set[str] | None = None,
+    scanned_only: bool = False,
+    exclude_docs: set[str] | None = None,
 ) -> list[Task]:
-    """Pick `n_docs` documents within the page range and `per_doc` questions from each."""
+    """Pick `n_docs` documents within the page range and `per_doc` questions from each.
+
+    Slices: `evidence` keeps only questions whose evidence includes one of these sources
+    (Chart, Table, Figure, Pure-text, Generalized-text); `scanned_only` keeps documents with
+    almost no text layer; `exclude_docs` skips documents used in earlier runs.
+    """
     rows = load_rows()
+    if evidence:
+        rows = [r for r in rows if _evidence(r) & evidence]
     by_doc: dict[str, list[dict]] = {}
     for r in rows:
+        if exclude_docs and r["doc_id"] in exclude_docs:
+            continue
         by_doc.setdefault(r["doc_id"], []).append(r)
     rng = random.Random(seed)
     doc_ids = sorted(d for d, qs in by_doc.items() if len(qs) >= per_doc)
@@ -69,6 +101,8 @@ def select_tasks(
             print(f"skipping {doc_id}: {e}")
             continue
         if not (min_pages <= page_count(pdf) <= max_pages):
+            continue
+        if scanned_only and text_chars_per_page(pdf) > 100:
             continue
         qs = sorted(by_doc[doc_id], key=lambda r: r["question"])
         for i, r in enumerate(rng.sample(qs, per_doc)):

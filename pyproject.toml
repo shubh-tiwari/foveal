@@ -12,7 +12,9 @@ dependencies = ["pillow>=10", "imagehash>=4.3"]
 anthropic = ["anthropic>=0.70"]
 bench = ["anthropic>=0.70", "pymupdf>=1.24", "pyarrow>=15", "huggingface_hub>=0.24", "matplotlib>=3.8", "python-dotenv>=1.0"]
 report = ["matplotlib>=3.8"]
-ocr = ["pytesseract>=0.3"]
+ocr = [
+    "pytesseract>=0.3",
+]
 pdf = ["pymupdf>=1.24"]
 
 [project.scripts]
