@@ -18,6 +18,7 @@ from typing import Any
 
 from bench.mmlongbench.render import PageRenderer
 from foveal.instrument import Tracer
+from foveal.instrument.client import current_scope
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 MAX_PAGES_PER_CALL = 8
@@ -140,6 +141,43 @@ figures, photos and visual layout are NOT in the text layer: call look(page, det
 to see them. Use a glimpse to find where something is on a page, then look at that region \
 with detail='full' to read it."""
 
+NOTE_TOOL = {
+    "name": "note",
+    "description": (
+        "Record a fact you established from a page so other agents and later questions can "
+        "reuse it instead of re-reading. Be specific and self-contained (include the "
+        "subject, number and unit). region=[x0, y0, x1, y1] fractions of the page where it is."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "page": {"type": "integer"},
+            "claim": {"type": "string"},
+            "region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+            "seen_at": {"type": "string", "enum": ["text", "glimpse", "full"]},
+        },
+        "required": ["page", "claim"],
+        "additionalProperties": False,
+    },
+}
+
+RECALL_TOOL = {
+    "name": "recall_notes",
+    "description": "Search notes (facts) other agents recorded about this document.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+}
+
+FACTS_NOTE = """
+
+Agents share notes. Earlier notes about this document are listed with the question; use \
+them instead of re-reading pages when they answer it, and verify with look when unsure. \
+When you establish a fact relevant to the question, record it with note(page, claim, region)."""
+
 VIEW_PAGES_MEMORY = {
     **ORCH_TOOLS[1],
     "description": "Read pages' captions and full text layers (no images; use look for visuals).",
@@ -172,17 +210,52 @@ class DocQA:
         if doc.images:
             return (ORCH_SYSTEM, ORCH_TOOLS) if role == "orch" else (READER_SYSTEM, READER_TOOLS)
         note = MEMORY_NOTE_ON_DEMAND if getattr(doc, "text_on_demand", False) else MEMORY_NOTE
+        facts = getattr(doc, "facts", False)
+        if facts:
+            note += FACTS_NOTE
         if role == "orch":
-            return ORCH_SYSTEM + note, [
-                ORCH_TOOLS[0],
-                VIEW_PAGES_MEMORY,
-                LOOK_TOOL,
-                ORCH_TOOLS[2],
-            ]
-        return READER_SYSTEM + note, [VIEW_PAGES_MEMORY, LOOK_TOOL]
+            tools = [ORCH_TOOLS[0], VIEW_PAGES_MEMORY, LOOK_TOOL]
+            tools += [RECALL_TOOL, NOTE_TOOL] if facts else []
+            return ORCH_SYSTEM + note, [*tools, ORCH_TOOLS[2]]
+        return READER_SYSTEM + note, [VIEW_PAGES_MEMORY, LOOK_TOOL, *([NOTE_TOOL] if facts else [])]
 
     def _page_tool(self, doc: PageRenderer, u: Any) -> dict:
-        """Result for view_pages / look tool calls (shared by both roles)."""
+        """Result for view_pages / look / note / recall_notes tool calls (both roles)."""
+        if u.name == "recall_notes":
+            return {
+                "type": "tool_result",
+                "tool_use_id": u.id,
+                "content": doc.notes(str(u.input.get("query", ""))),
+            }
+        if u.name == "note":
+            page = u.input.get("page")
+            if not isinstance(page, int) or not 1 <= page <= doc.page_count:
+                return {
+                    "type": "tool_result",
+                    "tool_use_id": u.id,
+                    "is_error": True,
+                    "content": f"page must be an integer 1-{doc.page_count}",
+                }
+            s = current_scope()
+            level = {"text": "L1", "glimpse": "L2", "full": "L3"}.get(
+                u.input.get("seen_at", "full"), "L3"
+            )
+            try:
+                msg = doc.note(
+                    page,
+                    str(u.input.get("claim", "")),
+                    u.input.get("region"),
+                    author=f"{s.task_id}/{s.agent_id}",
+                    level=level,
+                )
+            except ValueError as e:
+                return {
+                    "type": "tool_result",
+                    "tool_use_id": u.id,
+                    "is_error": True,
+                    "content": str(e),
+                }
+            return {"type": "tool_result", "tool_use_id": u.id, "content": msg}
         if u.name == "look":
             page = u.input.get("page")
             if not isinstance(page, int) or not 1 <= page <= doc.page_count:
@@ -301,6 +374,12 @@ class DocQA:
                 "content": (
                     f"Document: {doc.title()}\nPages: {doc.page_count}\nOutline:\n{outline}\n\n"
                     f"Question: {question}"
+                    + (
+                        "\n\nNotes from earlier work on this document (by other agents; "
+                        f"verify with look if unsure):\n{doc.notes(question)}"
+                        if getattr(doc, "facts", False)
+                        else ""
+                    )
                 ),
             }
         ]

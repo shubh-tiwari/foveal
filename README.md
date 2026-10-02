@@ -56,6 +56,26 @@ kept every frame's information, and every reconstruction was pixel-exact. Token 
 smaller (-21%), because web tasks change pages often. See
 [docs/phase2_replay_mind2web.md](docs/phase2_replay_mind2web.md).
 
+## Shared facts (Phase 3)
+
+```python
+f = mem.write_fact(
+    shot.asset_id,
+    "order total is $120",
+    region=(100, 400, 300, 40),
+    author="reader-1",
+    source="tab:checkout",
+)
+mem.recall_facts("what is the order total?")  # fresh facts, best first, with provenance
+mem.verify_fact(f.fact_id)  # zoom into the cited region
+mem.subscribe("orch", "tab:checkout", region=(100, 400, 300, 40))
+mem.ingest_frame(new_screenshot, "tab:checkout")  # facts whose region changed become stale
+mem.poll("reader-1")  # -> [Event(kind="stale", ...)]
+```
+
+Facts live in the store's SQLite file by default. `Memory(facts=RedisFacts(url))` shares them
+across machines.
+
 ## Phase 0: measure re-perception
 
 `foveal.instrument` wraps the Anthropic client without changing any request. It logs every

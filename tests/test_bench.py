@@ -49,3 +49,37 @@ def test_memory_mode_dry_run(tmp_path, monkeypatch):
     assert looks  # pixels arrive only through look()
     base = compute(read_jsonl(tmp_path / "runs" / "img.jsonl"))
     assert s["image_tokens_total"] < base["image_tokens_total"]
+
+
+def test_facts_mode_shares_notes_across_questions(tmp_path, monkeypatch):
+    from bench.mmlongbench.agents import DocQA
+    from bench.mmlongbench.render import MemoryPages
+    from foveal.memory import Memory
+
+    monkeypatch.chdir(tmp_path)
+    store = tmp_path / "st"
+    assert (
+        main(
+            [
+                "--dry-run",
+                "--docs",
+                "1",
+                "--per-doc",
+                "2",
+                "--store",
+                str(store),
+                "--run-id",
+                "f",
+                "--mode",
+                "memory",
+                "--facts",
+            ]
+        )
+        == 0
+    )
+    pdf = next((tmp_path / ".cache" / "synthetic").glob("*.pdf"))
+    doc = MemoryPages(pdf, Memory(store), facts=True)
+    notes = doc.notes("What is the value on page 3?")
+    assert "p.3: The value on page 3 is 101" in notes and "reader-" in notes
+    system, tools = DocQA._tools(doc, "orch")
+    assert {"recall_notes", "note"} <= {t["name"] for t in tools} and "share notes" in system

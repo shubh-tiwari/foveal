@@ -138,17 +138,38 @@ Goal: consecutive screenshots and video frames cost only what changed.
 - Video: frame sampling with PyAV, plus near-duplicate frame collapse
 - Benchmarks: a computer-use or web slice (OSWorld or WebArena) and a Video-MME slice
 
-## Phase 3 — Shared, synced fact memory
+## Phase 3 — Shared, synced fact memory (built; live eval pending)
 
 Goal: one agent's perception becomes every agent's knowledge, and stale facts are never acted on.
 
-- `Fact` records: claim, asset, version, region, level seen, confidence, author
-- `write_fact`, `recall_facts` (embedding + keyword search) and verification by zooming into the
-  cited region
-- Invalidation: a new asset version marks dependent facts `stale`
-- `subscribe(asset_id, region)`: notify on change instead of polling
-- Redis backend for multi-process orchestrators
-- New metric: stale-action rate, the share of actions based on an outdated asset version
+- [x] `foveal.facts.Fact`: claim, asset, stream version, pixel region, level seen, confidence,
+  author, status
+- [x] `Memory.write_fact`, `recall_facts` (BM25 over claims, weighted by confidence, plus an
+  optional embedding hook), and `verify_fact`, which zooms into the cited region
+- [x] **Region-aware invalidation.** On a new stream version, a fact whose region is untouched
+  carries forward to the new version, shifted by any scroll and left alone inside a sticky
+  header. A fact whose region changed, scrolled out of view, or that has no region becomes
+  `stale` with a reason, and its author gets a `stale` event.
+- [x] Subscriptions: `subscribe(agent, source, region)` watches a fixed screen area, and
+  `poll(agent)` returns `changed` / `stale` events
+- [x] Backends behind one interface: `SQLiteFacts` (WAL, the store's own file; tested with a
+  second process polling events) and `RedisFacts` (JSON facts with set indexes; events in a
+  stream for polling and also published on a channel). Tests run against a throwaway
+  `redis-server`.
+- [x] Harness `--mode memory --facts` (optionally with `--redis-url`): readers and the
+  orchestrator get `note`, the orchestrator gets `recall_notes`, and every question starts
+  with the top fresh notes from earlier work on the same document. Tested with dry runs only.
+- [ ] **Live evaluation (needs budget approval, ~$2–3):** the same 16 questions with
+  `--mode memory --facts`, compared with the Phase 1 memory run (`foveal compare --judge`).
+  Gate: same success, fewer image/text tokens on later questions per document
+  (cross-question repeats were 65% of first-seen pages in Phase 0).
+  ```sh
+  uv run python -m bench.mmlongbench.run --mode memory --facts --docs 4 --per-doc 4 \
+      --run-id p3-facts --store .foveal-p3 --max-cost-usd 3
+  uv run foveal compare runs/phase1-memory-v2.jsonl runs/p3-facts.jsonl --judge
+  ```
+- Not yet: stale-action rate on a live screen workload, which needs a live computer-use or
+  browser loop (Phase 4 evaluation).
 
 ## Phase 4 — Budget-aware assembler, interfaces and evaluation
 

@@ -13,8 +13,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from foveal.facts import rank
 from foveal.memory import Memory
-from foveal.memory.render import render_pdf_page
+from foveal.memory.render import render_pdf_page, validate_region
 
 
 class PageRenderer:
@@ -87,10 +88,18 @@ class MemoryPages(PageRenderer):
 
     PREVIEW_CHARS = 300
 
-    def __init__(self, pdf: Path, memory: Memory, text_on_demand: bool = False, **kw: Any):
+    def __init__(
+        self,
+        pdf: Path,
+        memory: Memory,
+        text_on_demand: bool = False,
+        facts: bool = False,
+        **kw: Any,
+    ):
         super().__init__(pdf, **kw)
         self.memory = memory
         self.text_on_demand = text_on_demand
+        self.facts = facts  # agents write notes (facts) and later questions recall them
         self.assets = memory.ingest_pdf(pdf, dpi=self.dpi)
 
     def _preview(self, p: int) -> str:
@@ -132,3 +141,33 @@ class MemoryPages(PageRenderer):
             },
             view.block(),
         ]
+
+    # -- shared facts -------------------------------------------------------------
+
+    def note(self, page: int, claim: str, region: Any, author: str, level: str) -> str:
+        a = self.assets[page - 1]
+        box = None
+        if region is not None:
+            x0, y0, x1, y1 = validate_region(region)
+            box = (
+                int(x0 * a.width),
+                int(y0 * a.height),
+                int((x1 - x0) * a.width),
+                int((y1 - y0) * a.height),
+            )
+        f = self.memory.write_fact(a.asset_id, claim, region=box, author=author, level_seen=level)
+        return f"Noted as fact {f.fact_id}."
+
+    def notes(self, query: str, k: int = 8) -> str:
+        """Fresh facts about this document relevant to `query`, best first."""
+        pages = {a.asset_id: i + 1 for i, a in enumerate(self.assets)}
+        pool = [f for f in self.memory.facts.query(status="fresh") if f.asset_id in pages]
+        hits = rank(query, pool, k)
+        return (
+            "\n".join(
+                f"- p.{pages[f.asset_id]}: {f.claim} (by {f.author}, seen at {f.level_seen}, "
+                f"confidence {f.confidence:.1f})"
+                for _, f in hits
+            )
+            or "(no notes yet)"
+        )

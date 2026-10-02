@@ -16,6 +16,7 @@ from bench.mmlongbench.agents import AgentConfig, BudgetExceeded, DocQA
 from bench.mmlongbench.data import select_tasks, synthetic_tasks
 from bench.mmlongbench.render import MemoryPages, PageRenderer
 from bench.mmlongbench.score import score
+from foveal.facts import RedisFacts
 from foveal.instrument import InstrumentedAnthropic, JsonlSink, TokenCounter, Tracer
 from foveal.memory import Captioner, Memory
 
@@ -66,6 +67,12 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=384,
         help="downscale pages to this many visual tokens before captioning (0 = full page)",
+    )
+    ap.add_argument("--redis-url", default=None, help="share facts via Redis instead of SQLite")
+    ap.add_argument(
+        "--facts",
+        action="store_true",
+        help="memory mode: agents write notes; later questions recall them",
     )
     ap.add_argument(
         "--text-on-demand",
@@ -145,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             model=args.reader_model,
             long_edge=args.long_edge,
+            facts=RedisFacts(args.redis_url) if args.redis_url else None,
         )
 
     renderers: dict[str, PageRenderer] = {}
@@ -159,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
                         t.pdf_path,
                         memory,
                         text_on_demand=args.text_on_demand,
+                        facts=args.facts,
                         long_edge=args.long_edge,
                     )
         return renderers[t.doc_id]

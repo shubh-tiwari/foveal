@@ -121,6 +121,23 @@ class _Messages:
                 ],
                 [self._block(type="text", text="The value is 101 (page 3).")],
             ]
+            if "note" in names:  # facts mode: record what was found before answering
+                script.insert(
+                    2,
+                    [
+                        self._block(
+                            type="tool_use",
+                            id=tid(),
+                            name="note",
+                            input={
+                                "page": 3,
+                                "claim": "The value on page 3 is 101",
+                                "region": [0, 0, 1, 0.4],
+                                "seen_at": "full",
+                            },
+                        )
+                    ],
+                )
         else:
             script = [
                 [self._block(type="tool_use", id=tid(), name="view_pages", input={"pages": [6]})],

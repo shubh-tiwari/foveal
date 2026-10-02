@@ -20,6 +20,16 @@ from typing import Any
 from PIL import Image
 
 from foveal.diff import FrameDiff, describe, diff_frames
+from foveal.facts import (
+    Event,
+    Fact,
+    FactBackend,
+    SQLiteFacts,
+    Subscription,
+    carry_forward,
+    rank,
+    region_touched,
+)
 from foveal.instrument.hashing import sha256_hex
 from foveal.instrument.tokens import estimate_image_tokens
 from foveal.memory.render import (
@@ -112,8 +122,13 @@ class Memory:
         model: str = "claude-sonnet-5-5",
         glimpse_tokens: int = 256,
         long_edge: int = 1568,
+        facts: FactBackend | None = None,
+        embed: Any = None,
     ):
         self.store = Store(root)
+        # Shared fact memory: SQLite in the same store by default, or e.g. RedisFacts(url)
+        self.facts: FactBackend = facts or SQLiteFacts(self.store.root / "foveal.sqlite")
+        self.embed = embed  # optional text -> vector callable for recall
         self.captioner = captioner
         self.model = model  # used for token estimates of what look() returns
         self.glimpse_tokens = glimpse_tokens
@@ -302,7 +317,10 @@ class Memory:
         else:
             prev = Path(self.get(latest.asset_id).levels["L3"]).read_bytes()
             d = diff_frames(_open(prev), _open(data))
-        return self._versioned(self.store.add_version(source, sha, _diff_json(d)))
+        row = self.store.add_version(source, sha, _diff_json(d))
+        if latest is not None:
+            self._on_new_version(source, row.version, sha, row.diff)
+        return self._versioned(row)
 
     def latest(self, source: str) -> Asset:
         row = self.store.latest_version(source)
@@ -350,6 +368,110 @@ class Memory:
                     )
                 )
         return DiffView(source, since, new.version, d, text, views)
+
+    # -- shared facts (Phase 3) -------------------------------------------------
+
+    def write_fact(
+        self,
+        asset_id: str,
+        claim: str,
+        region: Any = None,
+        confidence: float = 1.0,
+        author: str = "agent",
+        level_seen: str = "L3",
+        source: str | None = None,
+    ) -> Fact:
+        """Record what an agent learned from an asset. `region` is a pixel box (x, y, w, h)
+        in the asset; `source` ties the fact to a stream so later versions can invalidate it."""
+        self.get(asset_id)  # must exist
+        version = None
+        if source is not None:
+            latest = self.store.latest_version(source)
+            version = latest.version if latest else None
+        fact = Fact(
+            claim=claim,
+            asset_id=asset_id,
+            author=author,
+            region=tuple(int(v) for v in region) if region is not None else None,
+            level_seen=level_seen,
+            confidence=confidence,
+            source=source,
+            asset_version=version,
+        )
+        self.facts.put(fact)
+        return fact
+
+    def recall_facts(
+        self,
+        query: str,
+        asset_id: str | None = None,
+        source: str | None = None,
+        include_stale: bool = False,
+        k: int = 5,
+    ) -> list[Fact]:
+        """Facts relevant to `query`, best first, with provenance; stale ones only on request."""
+        pool = self.facts.query(
+            asset_id=asset_id, source=source, status=None if include_stale else "fresh"
+        )
+        return [f for _, f in rank(query, pool, k, self.embed)]
+
+    def verify_fact(self, fact_id: str, detail: str = "full") -> View:
+        """Zoom into the region a fact cites (the whole asset if it has none)."""
+        f = self.facts.get(fact_id)
+        if f is None:
+            raise KeyError(fact_id)
+        region = None
+        if f.region is not None:
+            a = self.get(f.asset_id)
+            x, y, w, h = f.region
+            region = (x / a.width, y / a.height, (x + w) / a.width, (y + h) / a.height)
+        return self.look(f.asset_id, region=region, detail=detail)
+
+    def subscribe(self, agent_id: str, source: str, region: Any = None) -> None:
+        """Be notified (via `poll`) when `source` changes, or only when `region` does."""
+        self.facts.subscribe(
+            Subscription(agent_id, source, tuple(region) if region is not None else None)
+        )
+
+    def poll(self, agent_id: str, after: int = 0) -> list[Event]:
+        """Events for this agent after event id `after` (changes and stale facts)."""
+        return self.facts.poll(agent_id, after)
+
+    def _on_new_version(
+        self, source: str, version: int, asset_id: str, diff: dict[str, Any]
+    ) -> None:
+        a = self.get(asset_id)
+        for f in self.facts.query(source=source, status="fresh"):
+            region, reason = carry_forward(f.region, diff, a.height)
+            if reason is None:
+                f.asset_id, f.asset_version, f.region = asset_id, version, region
+            else:
+                f.status, f.stale_reason = "stale", reason
+                self.facts.emit(
+                    Event(
+                        0,
+                        "stale",
+                        source,
+                        version,
+                        f.author,
+                        {"fact_id": f.fact_id, "claim": f.claim, "reason": reason},
+                    )
+                )
+            self.facts.put(f)
+        if diff.get("kind") == "identical" and not diff.get("scroll_dy"):
+            return
+        for sub in self.facts.subscriptions(source):
+            if region_touched(sub.region, diff, a.height):
+                self.facts.emit(
+                    Event(
+                        0,
+                        "changed",
+                        source,
+                        version,
+                        sub.agent_id,
+                        {"diff": diff, "region": sub.region},
+                    )
+                )
 
 
 def ocr(data: bytes) -> str | None:
