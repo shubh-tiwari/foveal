@@ -169,7 +169,12 @@ def main(argv: list[str] | None = None) -> int:
         memory = Memory(
             store,
             captioner=Captioner(
-                client, model=caption_model, image_tokens=args.caption_image_tokens or None
+                client,
+                model=caption_model,
+                image_tokens=args.caption_image_tokens or None,
+                request={"output_config": {"effort": "none"}}
+                if args.provider == "openrouter"
+                else None,
             ),
             model=args.reader_model,
             long_edge=args.long_edge,

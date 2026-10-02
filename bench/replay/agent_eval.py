@@ -127,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--steps", type=int, default=150, help="steps to evaluate (all policies)")
     ap.add_argument("--policies", default=",".join(POLICIES))
     ap.add_argument("--model", default="claude-sonnet-5-5")
+    ap.add_argument("--provider", default="anthropic", choices=["anthropic", "openrouter"])
     ap.add_argument("--effort", default="low")
     ap.add_argument("--max-cost-usd", type=float, default=6.0)
     ap.add_argument("--run-id", default=None)
@@ -143,11 +144,17 @@ def main(argv: list[str] | None = None) -> int:
         raw: Any = FakeActionClient()
         trajs = load(1, 3, with_candidates=True)[:4]
     else:
-        import anthropic
         from dotenv import load_dotenv
 
         load_dotenv()
-        raw = anthropic.Anthropic()
+        if args.provider == "openrouter":
+            from bench.openrouter import OpenRouterClient
+
+            raw = OpenRouterClient()
+        else:
+            import anthropic
+
+            raw = anthropic.Anthropic()
         trajs = load(2, 3, with_candidates=True)
     tracer = Tracer(run_id, JsonlSink(log))
     client = InstrumentedAnthropic(raw, tracer)
@@ -171,8 +178,8 @@ def main(argv: list[str] | None = None) -> int:
                     max_tokens=4000,
                     system=SYSTEM,
                     messages=prompt(t, k, policy),
-                    thinking={"type": "adaptive"},
                     output_config={"effort": args.effort},
+                    **({} if args.provider == "openrouter" else {"thinking": {"type": "adaptive"}}),
                 )
                 text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
                 pick, op = parse(text)

@@ -58,11 +58,15 @@ class Captioner:
         model: str = "claude-haiku-4-5",
         max_tokens: int = 120,
         image_tokens: int | None = 384,
+        request: dict[str, Any] | None = None,
     ):
         self.client = client
         self.model = model
         self.max_tokens = max_tokens
         self.image_tokens = image_tokens  # downscale pages to this many visual tokens first
+        # extra request fields, e.g. {"output_config": {"effort": "none"}} so a reasoning
+        # model does not spend the caption's token budget on thinking
+        self.request = request or {}
 
     def __call__(self, jpeg: bytes) -> str:
         if self.image_tokens:
@@ -81,6 +85,7 @@ class Captioner:
             messages=[
                 {"role": "user", "content": [block, {"type": "text", "text": CAPTION_PROMPT}]}
             ],
+            **self.request,
         )
         text = " ".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
         return " ".join(text.split())
@@ -141,9 +146,11 @@ class Memory:
     def _finish(self, asset: Asset, l3: bytes, caption: bool = True) -> Asset:
         existing = self.store.get(asset.asset_id)
         if existing is not None:  # perceived before: nothing to pay
-            if caption and existing.caption is None and self.captioner is not None:
-                self.store.update_levels(existing.asset_id, L0=self.captioner(l3))
-                existing = self.store.get(asset.asset_id)
+            if caption and not existing.caption and self.captioner is not None:
+                text = self.captioner(l3)
+                if text:
+                    self.store.update_levels(existing.asset_id, L0=text)
+                    existing = self.store.get(asset.asset_id)
             return existing
         if asset.levels.pop("L1_needs_ocr", False):  # scanned page: OCR once, at first sight
             text = ocr(l3)
@@ -153,7 +160,9 @@ class Memory:
         l2 = thumbnail(l3, self.glimpse_tokens)
         asset.levels["L2"] = str(self.store.write_blob(asset.asset_id + "_l2", l2))
         if caption and self.captioner is not None:
-            asset.levels["L0"] = self.captioner(l3)
+            text = self.captioner(l3)
+            if text:  # an empty caption counts as missing, so it is retried later
+                asset.levels["L0"] = text
         self.store.put(asset)
         return asset
 
