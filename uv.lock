@@ -510,6 +510,12 @@ bench = [
     { name = "pymupdf" },
     { name = "python-dotenv" },
 ]
+ocr = [
+    { name = "pytesseract" },
+]
+pdf = [
+    { name = "pymupdf" },
+]
 report = [
     { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "matplotlib", version = "3.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -532,9 +538,11 @@ requires-dist = [
     { name = "pillow", specifier = ">=10" },
     { name = "pyarrow", marker = "extra == 'bench'", specifier = ">=15" },
     { name = "pymupdf", marker = "extra == 'bench'", specifier = ">=1.24" },
+    { name = "pymupdf", marker = "extra == 'pdf'", specifier = ">=1.24" },
+    { name = "pytesseract", marker = "extra == 'ocr'", specifier = ">=0.3" },
     { name = "python-dotenv", marker = "extra == 'bench'", specifier = ">=1.0" },
 ]
-provides-extras = ["anthropic", "bench", "report"]
+provides-extras = ["anthropic", "bench", "report", "ocr", "pdf"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1660,6 +1668,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e4/11/b213bebff182584360cb8d17c72c1677fec5c5c228de439e63bcf8ab1c8f/pyparsing-3.3.3.tar.gz", hash = "sha256:928ae7e20211f3b6f3915a72f06a0cfd29ab9d24279dd6346b6b1a7146397d36", size = 1050487, upload-time = "2026-09-20T20:59:05.609Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/38/bb/d215ee7c73b61497b28a5503f9f53523f294fcc936762b7caf90e0c1c2b5/pyparsing-3.3.3-py3-none-any.whl", hash = "sha256:ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4", size = 126420, upload-time = "2026-09-20T20:59:04.025Z" },
+]
+
+[[package]]
+name = "pytesseract"
+version = "0.3.13"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "pillow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9f/a6/7d679b83c285974a7cb94d739b461fa7e7a9b17a3abfd7bf6cbc5c2394b0/pytesseract-0.3.13.tar.gz", hash = "sha256:4bf5f880c99406f52a3cfc2633e42d9dc67615e69d8a509d74867d3baddb5db9", size = 17689, upload-time = "2024-08-16T02:33:56.762Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7a/33/8312d7ce74670c9d39a532b2c246a853861120486be9443eebf048043637/pytesseract-0.3.13-py3-none-any.whl", hash = "sha256:7a99c6c2ac598360693d83a416e36e0b33a67638bb9d77fdcac094a3589d4b34", size = 14705, upload-time = "2024-08-16T02:36:10.09Z" },
 ]
 
 [[package]]

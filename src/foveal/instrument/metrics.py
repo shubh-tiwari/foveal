@@ -68,7 +68,17 @@ def _keep_last_n(images: list[dict[str, Any]], n: int) -> int:
 def compute(
     records: list[dict[str, Any]], keep_last: int = 3, phash_threshold: int = 4
 ) -> dict[str, Any]:
-    calls = sorted((r for r in records if r.get("type") == "call"), key=lambda r: r["call_index"])
+    all_calls = sorted(
+        (r for r in records if r.get("type") == "call"), key=lambda r: r["call_index"]
+    )
+
+    # Ingest calls (e.g. L0 captioning) are the one-off cost of perceiving each input once;
+    # they are reported separately, not as tasks.
+    def is_ingest(c: dict[str, Any]) -> bool:
+        return str(c.get("task_id") or "").startswith("ingest:")
+
+    ingest = [c for c in all_calls if is_ingest(c)]
+    calls = [c for c in all_calls if not is_ingest(c)]
     results = {r["task_id"]: r for r in records if r.get("type") == "task"}
 
     tasks: dict[str, TaskMetrics] = {}
@@ -146,7 +156,14 @@ def compute(
             )
             doc_seen[tm.doc_id].update(shas)
 
-    return summarize(list(tasks.values()), per_agent, calls, keep_last)
+    summary = summarize(list(tasks.values()), per_agent, calls, keep_last)
+    summary["ingest_calls"] = len(ingest)
+    summary["ingest_image_tokens"] = sum(
+        _tok(i) for c in ingest for i in c.get("images", []) if i.get("kind") == "image"
+    )
+    summary["ingest_cost_usd"] = sum((c.get("meta") or {}).get("cost_usd", 0.0) for c in ingest)
+    summary["cost_usd_with_ingest"] = summary["cost_usd_total"] + summary["ingest_cost_usd"]
+    return summary
 
 
 def summarize(

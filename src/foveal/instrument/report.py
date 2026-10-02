@@ -36,6 +36,11 @@ def markdown(summary: dict[str, Any], gate_threshold: float = 0.40, keep_last: i
         ),
         ("Success rate", pct(s["success_rate"])),
         ("Run cost (from usage)", f"${s['cost_usd_total']:.2f}"),
+        (
+            "Ingest (captions): calls / image tokens / cost",
+            f"{s.get('ingest_calls', 0)} / {s.get('ingest_image_tokens', 0):,} / "
+            f"${s.get('ingest_cost_usd', 0.0):.2f}",
+        ),
         ("Mean latency per call", f"{s['latency_s_per_call_mean']:.1f}s"),
     ]
     lines = [

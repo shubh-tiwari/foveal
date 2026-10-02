@@ -58,7 +58,7 @@ def _num_match(gold: float, preds: list[float], rel: float = 0.01) -> bool:
     return False
 
 
-def score(gold: str, pred: str | None, fmt: str) -> float:
+def score(gold: str, pred: str | None, fmt: str, question: str = "") -> float:
     if pred is None:
         return 0.0
     p = pred.strip()

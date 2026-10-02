@@ -29,3 +29,23 @@ def test_dry_run_end_to_end(tmp_path, monkeypatch):
     # count_tokens ground truth (fake) agrees with the estimate for every image
     imgs = [i for c in calls for i in c["images"]]
     assert imgs and all(i["tokens"] == i["est_tokens"] for i in imgs)
+
+
+def test_memory_mode_dry_run(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    args = ["--dry-run", "--docs", "1", "--per-doc", "2", "--store", str(tmp_path / "st")]
+    assert main([*args, "--run-id", "img"]) == 0
+    assert main([*args, "--run-id", "mem", "--mode", "memory"]) == 0
+    mem = read_jsonl(tmp_path / "runs" / "mem.jsonl")
+    s = compute(mem)
+    assert s["ingest_calls"] == 12  # one caption per page, once for both tasks
+    assert s["ingest_image_tokens"] > 0
+    looks = [
+        i
+        for c in mem
+        if c["type"] == "call" and not c["task_id"].startswith("ingest:")
+        for i in c["images"]
+    ]
+    assert looks  # pixels arrive only through look()
+    base = compute(read_jsonl(tmp_path / "runs" / "img.jsonl"))
+    assert s["image_tokens_total"] < base["image_tokens_total"]

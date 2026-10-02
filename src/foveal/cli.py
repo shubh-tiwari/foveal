@@ -39,7 +39,39 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--keep-last", type=int, default=3)
     a.add_argument("--gate", type=float, default=0.40)
     a.add_argument("--no-plot", action="store_true")
+    c = sub.add_parser("compare", help="compare a foveal run with a baseline run")
+    c.add_argument("baseline")
+    c.add_argument("foveal")
+    c.add_argument("--ratio", type=float, default=0.95)
+    c.add_argument("--out", default=None)
+    c.add_argument(
+        "--judge",
+        action="store_true",
+        help="re-score both runs with the LLM judge (Claude Haiku 4.5)",
+    )
     args = ap.parse_args(argv)
+    if args.cmd == "compare":
+        from foveal.instrument.compare import compare
+
+        sys.path.insert(0, str(Path.cwd()))  # the bench lives in the repo, not the package
+        try:  # re-score both runs with one scorer, so a scorer fix applies to both
+            from bench.mmlongbench.score import score as rescore
+        except ImportError:
+            rescore = None
+            print("warning: bench not importable; using the scores stored in each log")
+        if args.judge and rescore is not None:
+            import anthropic
+            from dotenv import load_dotenv
+
+            from bench.mmlongbench.judge import Judge
+
+            load_dotenv()
+            rescore = Judge(anthropic.Anthropic())
+        md, ok = compare(read_jsonl(args.baseline), read_jsonl(args.foveal), rescore, args.ratio)
+        print(md)
+        if args.out:
+            Path(args.out).write_text(md)
+        return 0
     if args.cmd == "analyze":
         analyze(args.log, args.out, args.keep_last, args.gate, plot=not args.no_plot)
         return 0

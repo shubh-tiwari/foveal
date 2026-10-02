@@ -39,9 +39,29 @@ stopping, measure a longer-horizon workload where history accumulates:
 3. Report the same metrics with prompt caching on and off. Caching may already make
    resends cheap, which shrinks foveal's dollar savings even when the token savings are real.
 
-## Phase 1 — Asset store and representation ladder
+## Phase 1 — Asset store and representation ladder (in progress)
 
 Goal: perceive each input once, and keep only cheap representations in context.
+
+- [x] `Memory` and `Store` (SQLite plus content-addressed blobs), with `ingest`, `describe`, `look`
+- [x] L0 captions from Claude Haiku 4.5, L1 PDF text or optional OCR, L2 thumbnail at most
+  256 tokens, L3 full image or a zoomed PDF re-render
+- [x] Harness `--mode memory` and `foveal compare`, with captioning billed as ingest
+- [x] 16-task comparison against the Phase 0 baseline (2 Oct 2026): **gate PASS**
+  - Success is 10/16 for both, judged by Claude Haiku 4.5 identically for both runs. Every task
+    got the same verdict.
+  - Image tokens: 2.50M → 389K (-84%). That includes 258K one-off caption tokens.
+    Task-time image tokens: 2.50M → 131K (-95%).
+  - Cost: $4.06 → $1.53 (-62%), including $0.2 of captioning
+  - Several questions were answered from L0/L1 text alone, with no image sent.
+  - Caveats: the sample is small (16 tasks), and these PDFs have text layers. Scanned
+    documents need OCR for L1, and figure-heavy questions lean harder on `look()`.
+  - The rule-based scorer alone gives 9 vs 10. Its miss was a correct "the document mentions
+    no cooler" answer to a "Not answerable" question, so the LLM judge is the reported score.
+- [ ] Scale up: all 135 documents (or a stratified 40), plus a scanned/figure-heavy slice
+- Known limit: images returned by `look()` stay in history and are resent. Dropping them means
+  editing earlier turns, which breaks the prompt cache and invalidates preserved thinking.
+  That belongs to the Phase 4 assembler.
 
 - `Asset` and `Memory` data model, with a content-addressed store (SQLite + files on disk)
 - `ingest(source)` for images, PDF pages and screenshots, with sha256 dedup

@@ -58,7 +58,18 @@ class _Messages:
     def create(self, **kw: Any) -> SimpleNamespace:
         model, messages = kw["model"], kw["messages"]
         turn = sum(1 for m in messages if _get(m, "role") == "assistant")
-        is_orch = "final_answer" in [t["name"] for t in kw.get("tools", [])]
+        names = [t["name"] for t in kw.get("tools", [])]
+        is_orch = "final_answer" in names
+        if not names:  # captioner
+            return SimpleNamespace(
+                model=model,
+                stop_reason="end_turn",
+                content=[self._block(type="text", text="A synthetic page with a blue bar.")],
+                usage=_usage(
+                    input_tokens=400 + _image_tokens(messages[0]["content"], model),
+                    output_tokens=15,
+                ),
+            )
 
         def tid() -> str:
             return f"toolu_{next(self._ids)}"
@@ -89,6 +100,26 @@ class _Messages:
                         type="tool_use", id=tid(), name="final_answer", input={"answer": "101"}
                     )
                 ],
+            ]
+        elif "look" in names:
+            script = [
+                [
+                    self._block(
+                        type="tool_use",
+                        id=tid(),
+                        name="look",
+                        input={"page": 3, "detail": "glimpse"},
+                    )
+                ],
+                [
+                    self._block(
+                        type="tool_use",
+                        id=tid(),
+                        name="look",
+                        input={"page": 3, "detail": "full", "region": [0, 0, 1, 0.4]},
+                    )
+                ],
+                [self._block(type="text", text="The value is 101 (page 3).")],
             ]
         else:
             script = [

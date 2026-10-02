@@ -14,9 +14,10 @@ from pathlib import Path
 
 from bench.mmlongbench.agents import AgentConfig, BudgetExceeded, DocQA
 from bench.mmlongbench.data import select_tasks, synthetic_tasks
-from bench.mmlongbench.render import PageRenderer
+from bench.mmlongbench.render import MemoryPages, PageRenderer
 from bench.mmlongbench.score import score
 from foveal.instrument import InstrumentedAnthropic, JsonlSink, TokenCounter, Tracer
+from foveal.memory import Captioner, Memory
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -40,10 +41,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-cost-usd", type=float, default=6.0)
     ap.add_argument("--run-id", default=None)
     ap.add_argument("--runs-dir", default="runs")
+    ap.add_argument(
+        "--mode",
+        default="images",
+        choices=["images", "memory"],
+        help="images: full page images (baseline); memory: foveal L0/L1 + look()",
+    )
+    ap.add_argument("--caption-model", default="claude-haiku-4-5")
+    ap.add_argument("--store", default=None, help="foveal store dir (default .foveal[-dry])")
     ap.add_argument("--dry-run", action="store_true", help="fake client + synthetic PDFs")
     args = ap.parse_args(argv)
 
-    run_id = args.run_id or time.strftime("%Y%m%d-%H%M%S") + ("-dry" if args.dry_run else "")
+    run_id = args.run_id or (
+        time.strftime("%Y%m%d-%H%M%S") + f"-{args.mode}" + ("-dry" if args.dry_run else "")
+    )
     log = Path(args.runs_dir) / f"{run_id}.jsonl"
 
     if args.dry_run:
@@ -82,10 +93,30 @@ def main(argv: list[str] | None = None) -> int:
     qa = DocQA(client, tracer, cfg)
     tracer.log_event(type="run", config=vars(args), n_tasks=len(tasks))
 
+    memory = None
+    if args.mode == "memory":
+        store = args.store or (".foveal-dry" if args.dry_run else ".foveal")
+        memory = Memory(
+            store,
+            captioner=Captioner(client, model=args.caption_model),
+            model=args.reader_model,
+            long_edge=args.long_edge,
+        )
+
     renderers: dict[str, PageRenderer] = {}
-    print(f"run {run_id}: {len(tasks)} tasks -> {log}")
+
+    def open_doc(t):  # noqa: ANN001
+        if t.doc_id not in renderers:
+            if memory is None:
+                renderers[t.doc_id] = PageRenderer(t.pdf_path, long_edge=args.long_edge)
+            else:  # perceive every page once, up front; captions are logged as "ingest"
+                with tracer.scope(task_id=f"ingest:{t.doc_id}", agent_id="ingest", doc_id=t.doc_id):
+                    renderers[t.doc_id] = MemoryPages(t.pdf_path, memory, long_edge=args.long_edge)
+        return renderers[t.doc_id]
+
+    print(f"run {run_id} ({args.mode}): {len(tasks)} tasks -> {log}")
     for i, t in enumerate(tasks, 1):
-        doc = renderers.setdefault(t.doc_id, PageRenderer(t.pdf_path, long_edge=args.long_edge))
+        doc = open_doc(t)
         t0 = time.perf_counter()
         with tracer.scope(task_id=t.task_id, doc_id=t.doc_id):
             try:

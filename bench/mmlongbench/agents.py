@@ -99,6 +99,44 @@ ORCH_TOOLS = [
 
 READER_TOOLS = [ORCH_TOOLS[1]]
 
+LOOK_TOOL = {
+    "name": "look",
+    "description": (
+        "See a page as an image. detail='glimpse' is a low-resolution thumbnail (about 256 "
+        "tokens) for layout and finding things; detail='full' is full resolution. region="
+        "[x0, y0, x1, y1] as fractions of the page (0-1) zooms into part of a page, e.g. one "
+        "chart, at higher resolution. Prefer the text layer when it already answers."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "page": {"type": "integer", "description": "1-indexed page number"},
+            "detail": {"type": "string", "enum": ["glimpse", "full"]},
+            "region": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 4,
+                "maxItems": 4,
+                "description": "[x0, y0, x1, y1] fractions of page width/height",
+            },
+        },
+        "required": ["page", "detail"],
+        "additionalProperties": False,
+    },
+}
+
+MEMORY_NOTE = """
+
+Pages are shown as a short caption plus their text layer, not as images. Charts, figures, \
+photos and visual layout are NOT in the text layer: call look(page, detail, region) to see \
+them. Use a glimpse to find where something is on a page, then look at that region with \
+detail='full' to read it."""
+
+VIEW_PAGES_MEMORY = {
+    **ORCH_TOOLS[1],
+    "description": "Read pages' captions and text layers (no images; use look for visuals).",
+}
+
 
 @dataclass
 class TaskResult:
@@ -120,6 +158,45 @@ class DocQA:
         self.client = client
         self.tracer = tracer
         self.cfg = cfg
+
+    @staticmethod
+    def _tools(doc: PageRenderer, role: str) -> tuple[str, list]:
+        if doc.images:
+            return (ORCH_SYSTEM, ORCH_TOOLS) if role == "orch" else (READER_SYSTEM, READER_TOOLS)
+        if role == "orch":
+            return ORCH_SYSTEM + MEMORY_NOTE, [
+                ORCH_TOOLS[0],
+                VIEW_PAGES_MEMORY,
+                LOOK_TOOL,
+                ORCH_TOOLS[2],
+            ]
+        return READER_SYSTEM + MEMORY_NOTE, [VIEW_PAGES_MEMORY, LOOK_TOOL]
+
+    def _page_tool(self, doc: PageRenderer, u: Any) -> dict:
+        """Result for view_pages / look tool calls (shared by both roles)."""
+        if u.name == "look":
+            page = u.input.get("page")
+            if not isinstance(page, int) or not 1 <= page <= doc.page_count:
+                return {
+                    "type": "tool_result",
+                    "tool_use_id": u.id,
+                    "is_error": True,
+                    "content": f"page must be an integer 1-{doc.page_count}",
+                }
+            try:
+                blocks = doc.look(page, u.input.get("region"), u.input.get("detail", "glimpse"))
+            except ValueError as e:
+                return {
+                    "type": "tool_result",
+                    "tool_use_id": u.id,
+                    "is_error": True,
+                    "content": str(e),
+                }
+            return {"type": "tool_result", "tool_use_id": u.id, "content": blocks}
+        pg, err = self._valid_pages(u.input.get("pages"), doc.page_count)
+        if err:
+            return {"type": "tool_result", "tool_use_id": u.id, "content": err, "is_error": True}
+        return {"type": "tool_result", "tool_use_id": u.id, "content": doc.page_blocks(pg)}
 
     # -- model call -------------------------------------------------------
 
@@ -186,34 +263,16 @@ class DocQA:
                     ],
                 }
             ]
+            system, tools = self._tools(doc, "reader")
             for _ in range(self.cfg.max_reader_steps):
-                resp = self._call(self.cfg.reader_model, READER_SYSTEM, messages, READER_TOOLS)
+                resp = self._call(self.cfg.reader_model, system, messages, tools)
                 messages.append({"role": "assistant", "content": resp.content})
                 if resp.stop_reason == "refusal":
                     return "[reader declined the request]"
                 uses = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
                 if resp.stop_reason != "tool_use" or not uses:
                     return self._text(resp) or "[reader returned no text]"
-                results = []
-                for u in uses:
-                    pg, err = self._valid_pages(u.input.get("pages"), doc.page_count)
-                    if err:
-                        results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": u.id,
-                                "content": err,
-                                "is_error": True,
-                            }
-                        )
-                    else:
-                        results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": u.id,
-                                "content": doc.page_blocks(pg),
-                            }
-                        )
+                results = [self._page_tool(doc, u) for u in uses]
                 messages.append({"role": "user", "content": results})
             return self._text(resp) or "[reader hit its step limit without an answer]"
 
@@ -237,9 +296,10 @@ class DocQA:
             }
         ]
         readers = 0
+        system, tools = self._tools(doc, "orch")
         with self.tracer.scope(agent_id="orch"):
             for step in range(1, self.cfg.max_orch_steps + 1):
-                resp = self._call(self.cfg.orch_model, ORCH_SYSTEM, messages, ORCH_TOOLS)
+                resp = self._call(self.cfg.orch_model, system, messages, tools)
                 messages.append({"role": "assistant", "content": resp.content})
                 if resp.stop_reason == "refusal":
                     return TaskResult(None, step, readers, "refusal")
@@ -254,6 +314,8 @@ class DocQA:
                     continue
 
                 def handle(u: Any) -> dict:
+                    if u.name != "ask_reader":
+                        return self._page_tool(doc, u)
                     pg, err = self._valid_pages(u.input.get("pages"), doc.page_count)
                     if err:
                         return {
@@ -261,12 +323,6 @@ class DocQA:
                             "tool_use_id": u.id,
                             "content": err,
                             "is_error": True,
-                        }
-                    if u.name == "view_pages":
-                        return {
-                            "type": "tool_result",
-                            "tool_use_id": u.id,
-                            "content": doc.page_blocks(pg),
                         }
                     with id_lock:
                         rid = f"reader-{next(reader_ids)}"

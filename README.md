@@ -15,6 +15,38 @@ That passes the 40% gate. Prompt caching already served about 74% of those repea
 
 ![Cumulative image tokens per model call](docs/phase0_cumulative_image_tokens.png)
 
+## Memory (Phase 1)
+
+```python
+import anthropic
+from foveal import Captioner, Memory
+
+mem = Memory(".foveal", captioner=Captioner(anthropic.Anthropic()))  # L0 via Claude Haiku 4.5
+pages = mem.ingest("report.pdf")  # each page perceived once, deduplicated by content hash
+print(mem.describe(pages[3].asset_id))  # L0 caption + L1 text layer: no image tokens
+glimpse = mem.look(pages[3].asset_id)  # L2: about 256 tokens
+chart = mem.look(pages[3].asset_id, region=(0.1, 0.45, 0.9, 0.8), detail="full")
+chart.block()  # an Anthropic image block
+```
+
+| Level | Contents | Cost |
+| --- | --- | --- |
+| L0 | One-line caption, cached by hash | A few dozen text tokens |
+| L1 | PDF text layer, or OCR with the `ocr` extra | Text only |
+| L2 | Thumbnail | At most about 256 image tokens |
+| L3 | Full page, or a region re-rendered from the PDF at higher resolution | Full image cost |
+
+**Phase 1 result:** on the same 16 questions, memory mode matched the full-image baseline. Both
+scored 10/16, with every task getting the same verdict. Image tokens fell 84% (95% at task
+time), and cost fell from $4.06 to $1.53 including captions.
+
+The benchmark compares this against sending full pages:
+
+```sh
+uv run python -m bench.mmlongbench.run --mode memory --docs 4 --per-doc 4
+uv run foveal compare runs/<baseline>.jsonl runs/<memory>.jsonl
+```
+
 ## Phase 0: measure re-perception
 
 `foveal.instrument` wraps the Anthropic client without changing any request. It logs every
