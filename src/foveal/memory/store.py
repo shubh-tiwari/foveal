@@ -41,13 +41,33 @@ CREATE TABLE IF NOT EXISTS assets (
 )
 """
 
+# A stream (window, tab, camera) is a `source`; each new observation of it is a version.
+# Content stays deduplicated in `assets`; versions point at it.
+_VERSIONS = """
+CREATE TABLE IF NOT EXISTS versions (
+    source TEXT, version INTEGER, asset_id TEXT, parent_version INTEGER, diff TEXT,
+    created_at REAL, PRIMARY KEY (source, version)
+)
+"""
+
+
+@dataclass
+class VersionRow:
+    source: str
+    version: int
+    asset_id: str
+    parent_version: int | None
+    diff: dict[str, Any]
+
 
 class Store:
     def __init__(self, root: str | Path):
         self.root = Path(root)
         (self.root / "blobs").mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(self.root / "foveal.sqlite", check_same_thread=False)
+        self._db.execute("PRAGMA journal_mode=WAL")  # readers in other processes don't block
         self._db.execute(_SCHEMA)
+        self._db.execute(_VERSIONS)
         self._lock = threading.Lock()
 
     def blob_path(self, sha: str, suffix: str = ".jpg") -> Path:
@@ -111,6 +131,40 @@ class Store:
             raise KeyError(asset_id)
         a.levels.update(levels)
         self.put(a)
+
+    # -- versions -----------------------------------------------------------
+
+    def add_version(self, source: str, asset_id: str, diff: dict[str, Any]) -> VersionRow:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT MAX(version) FROM versions WHERE source=?", (source,)
+            ).fetchone()
+            parent = row[0]
+            version = (parent or 0) + 1
+            self._db.execute(
+                "INSERT INTO versions VALUES (?, ?, ?, ?, ?, ?)",
+                (source, version, asset_id, parent, json.dumps(diff), time.time()),
+            )
+            self._db.commit()
+        return VersionRow(source, version, asset_id, parent, diff)
+
+    def _version_rows(self, sql: str, args: tuple) -> list[VersionRow]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT source, version, asset_id, parent_version, diff FROM versions " + sql, args
+            ).fetchall()
+        return [VersionRow(r[0], r[1], r[2], r[3], json.loads(r[4])) for r in rows]
+
+    def latest_version(self, source: str) -> VersionRow | None:
+        rows = self._version_rows("WHERE source=? ORDER BY version DESC LIMIT 1", (source,))
+        return rows[0] if rows else None
+
+    def get_version(self, source: str, version: int) -> VersionRow | None:
+        rows = self._version_rows("WHERE source=? AND version=?", (source, version))
+        return rows[0] if rows else None
+
+    def versions(self, source: str) -> list[VersionRow]:
+        return self._version_rows("WHERE source=? ORDER BY version", (source,))
 
     def count(self) -> int:
         with self._lock:

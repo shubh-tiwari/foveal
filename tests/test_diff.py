@@ -69,3 +69,20 @@ def test_replay_policies_on_scrolling_trajectory():
     assert tok["last_1"] < tok["last_3"] < tok["full_history"]
     assert r["scrolls"] == 4 and all(r["target_ok"])
     assert max(r["fidelity_bad_px"]) == 0
+
+
+def test_scroll_under_sticky_header():
+    full = page(seed=7)
+
+    def framed(top):
+        f = view(full, top).copy()
+        ImageDraw.Draw(f).rectangle([0, 0, 1280, 80], fill=(20, 60, 140))  # sticky header
+        ImageDraw.Draw(f).text((20, 30), "Expedia", fill="white")
+        return f
+
+    a, b = framed(100), framed(300)
+    d = diff_frames(a, b)
+    assert d.kind == "partial" and d.scroll_dy == 200 and d.scroll_band[0] >= 80
+    assert d.changed_frac < 0.35  # only the revealed strip, not the whole frame
+    rec = np.asarray(reconstruct(a, b, d), dtype=np.int16)
+    assert np.abs(rec - np.asarray(b, dtype=np.int16)).max() < 30

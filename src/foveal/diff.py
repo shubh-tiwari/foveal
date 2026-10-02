@@ -34,7 +34,8 @@ class Box:
 @dataclass
 class FrameDiff:
     kind: str  # identical | partial | full
-    scroll_dy: int = 0  # curr row r shows prev row r + scroll_dy
+    scroll_dy: int = 0  # within the scroll band, curr row r shows prev row r + scroll_dy
+    scroll_band: tuple[int, int] | None = None  # rows [y0, y1) that scrolled (None = all)
     regions: list[Box] = field(default_factory=list)
     changed_frac: float = 0.0
 
@@ -52,8 +53,16 @@ def detect_scroll(
     sp = np.stack([prev.mean(1), prev.std(1)], 1)
     sc = np.stack([curr.mean(1), curr.std(1)], 1)
     lo = int(h * min_overlap)
-    best_dy, best_err = 0, np.abs(sp - sc).mean()
-    if best_err < noise:
+
+    def err_of(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
+        # Primary: 75th percentile of per-row error, so a toast or changed widget covering a
+        # minority of rows does not hide an otherwise clean scroll. Secondary: mean error,
+        # which separates the exact shift from near-misses that only blank rows support.
+        e = np.abs(a - b).sum(axis=1)
+        return float(np.percentile(e, 75)), float(e.mean())
+
+    best_dy, best = 0, err_of(sp, sc)
+    if best[0] < noise and best[1] < noise:
         return 0
     for dy in range(-(h - lo), h - lo + 1):
         if dy == 0:
@@ -64,10 +73,34 @@ def detect_scroll(
             a, b = sp[: h + dy], sc[-dy:]
         if (a[:, 1] > 1).mean() < 0.2:  # overlap is mostly blank rows: no evidence
             continue
-        err = np.abs(a - b).mean()
-        if err < best_err - 1e-9 or (abs(err - best_err) < 1e-9 and abs(dy) < abs(best_dy)):
-            best_dy, best_err = dy, err
-    return best_dy if best_err < noise else 0
+        err = err_of(a, b)
+        if (round(err[0], 3), err[1]) < (round(best[0], 3), best[1]):
+            best_dy, best = dy, err
+    return best_dy if best[0] < noise else 0
+
+
+def fixed_bands(prev: np.ndarray, curr: np.ndarray, tol: float = 4.0) -> tuple[int, int]:
+    """Rows [y0, y1) between an unchanged top band (sticky header) and bottom band (footer)."""
+    same = np.abs(prev - curr).mean(axis=1) < tol
+    h = len(same)
+    if same.all():
+        return 0, h
+    y0 = int(np.argmax(~same))
+    y1 = h - int(np.argmax(~same[::-1]))
+    return y0, y1
+
+
+def _apply_scroll(
+    prev: np.ndarray, dy: int, band: tuple[int, int] | None
+) -> tuple[np.ndarray, np.ndarray]:
+    """prev with rows in `band` scrolled by dy, plus a mask of rows with no prev content."""
+    h = prev.shape[0]
+    y0, y1 = band or (0, h)
+    out = prev.copy()
+    revealed = np.zeros(h, dtype=bool)
+    if dy:
+        out[y0:y1], revealed[y0:y1] = _shift(prev[y0:y1], dy)
+    return out, revealed
 
 
 def _shift(prev: np.ndarray, dy: int) -> tuple[np.ndarray, np.ndarray]:
@@ -100,8 +133,13 @@ def diff_frames(
         return FrameDiff("full", changed_frac=1.0)
     p, c = _gray(prev), _gray(curr)
     h, w = c.shape
-    dy = detect_scroll(p, c) if scroll else 0
-    aligned, revealed = _shift(p, dy)
+    dy, band = 0, None
+    if scroll:
+        y0, y1 = fixed_bands(p, c)
+        if y1 - y0 >= 0.3 * h:  # scroll inside the band between sticky header and footer
+            dy = detect_scroll(p[y0:y1], c[y0:y1])
+            band = (y0, y1) if dy and (y0, y1) != (0, h) else None
+    aligned, revealed = _apply_scroll(p, dy, band)
     changed = np.abs(c - aligned) > pix_thresh
     changed[revealed] = True
     th, tw = -(-h // tile), -(-w // tile)
@@ -110,7 +148,7 @@ def diff_frames(
     counts = pad.reshape(th, tile, tw, tile).sum(axis=(1, 3))
     mask = counts >= min_pixels
     if not mask.any():
-        return FrameDiff("identical", scroll_dy=dy)
+        return FrameDiff("identical", scroll_dy=dy, scroll_band=band)
     mask = ndimage.binary_dilation(mask, iterations=merge_gap)  # join nearby changes
     labels, _ = ndimage.label(mask)
     boxes = []
@@ -121,8 +159,8 @@ def diff_frames(
     boxes = _merge(boxes)
     frac = _union_area(boxes, w, h) / (w * h)
     if frac >= full_frac:
-        return FrameDiff("full", scroll_dy=dy, changed_frac=frac)
-    return FrameDiff("partial", scroll_dy=dy, regions=boxes, changed_frac=frac)
+        return FrameDiff("full", scroll_dy=dy, scroll_band=band, changed_frac=frac)
+    return FrameDiff("partial", scroll_dy=dy, scroll_band=band, regions=boxes, changed_frac=frac)
 
 
 def _merge(boxes: list[Box]) -> list[Box]:
@@ -159,15 +197,7 @@ def reconstruct(prev: Image.Image, curr: Image.Image, d: FrameDiff) -> Image.Ima
     if d.kind == "full":
         return curr.copy()
     arr = np.asarray(prev.convert("RGB"))
-    out = np.zeros_like(arr)
-    h = arr.shape[0]
-    dy = d.scroll_dy
-    if dy > 0:
-        out[: h - dy] = arr[dy:]
-    elif dy < 0:
-        out[-dy:] = arr[: h + dy]
-    else:
-        out = arr.copy()
+    out, _ = _apply_scroll(arr, d.scroll_dy, d.scroll_band)
     img = Image.fromarray(out)
     for b in d.regions:
         img.paste(curr.crop((b.x, b.y, b.x + b.w, b.y + b.h)), (b.x, b.y))
@@ -183,6 +213,7 @@ def describe(d: FrameDiff, since: str = "the previous frame") -> str:
         return "Changed substantially; full frame follows."
     parts = [f"Same as {since}"]
     if d.scroll_dy:
-        parts.append(f"scrolled {'down' if d.scroll_dy > 0 else 'up'} {abs(d.scroll_dy)}px")
+        where = f" (rows {d.scroll_band[0]}-{d.scroll_band[1]})" if d.scroll_band else ""
+        parts.append(f"scrolled {'down' if d.scroll_dy > 0 else 'up'} {abs(d.scroll_dy)}px{where}")
     regions = "; ".join(f"({b.x},{b.y},{b.w}x{b.h})" for b in d.regions)
     return ", ".join(parts) + f", except {len(d.regions)} changed region(s): {regions}."

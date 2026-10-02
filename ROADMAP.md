@@ -91,7 +91,7 @@ Goal: perceive each input once, and keep only cheap representations in context.
 - Re-run the Phase 0 harness with readers that receive L0/L1 plus a `look()` tool instead of
   raw pages. Measure image tokens and success against the Phase 0 baseline.
 
-## Phase 2 — Diff-based sync for continuous observations (in progress)
+## Phase 2 — Diff-based sync for continuous observations (built; live eval pending)
 
 Goal: consecutive screenshots and video frames cost only what changed.
 
@@ -107,8 +107,28 @@ Goal: consecutive screenshots and video frames cost only what changed.
   - Cost is where it wins. Keep-last-N changes the prompt prefix every step, so nothing is
     cached. Append-only histories cache. foveal_diff keeps all history for $2.17 versus
     $4.39 for keep-last-3 (-51%) and $2.81 for full history (-23%).
-- [ ] Replay a continuous workload where frames change little: desktop computer use or video
-- [ ] Wire diffs into the harness and `Memory` (asset versions, `diff_since`)
+- [x] Diff engine hardening: scroll inside the band between a sticky header and footer, and a
+  robust row-error measure, so a toast or changed widget doesn't hide a scroll
+- [x] Video replay (2 Oct 2026, $0): 9 screen recordings of flight booking on desktop and
+  phone (HumynLabs, CC-BY-4.0), one frame every 2 s (507 frames) or 5 s (205 frames)
+  - 2 s: foveal_diff is -43% tokens and -43% cost vs full history. foveal_window3 is -25%
+    vs keep-last-3.
+  - 5 s: -23% vs full history. Frames further apart share less.
+  - Even at 2 s, about half the frames are mostly new content (page loads, momentum
+    scrolling, typing). Tuning thresholds gained only 2 points, so the defaults stay strict
+    for fidelity: at most 0.27% of pixels wrong in the worst frame.
+- [x] `Memory.ingest_frame(image, source)` stores versioned streams: an unchanged frame
+  creates no version, each new version stores its diff, and content is deduplicated across
+  streams. Also `latest`, `version`, `history`, and `diff_since(source, v)`, which returns
+  text plus exact crops computed directly between the two frames.
+- [x] Live-ready web-agent evaluation, `bench/replay/agent_eval.py`: Mind2Web next-action
+  prediction (task, previous actions, about 8 on-screen candidates) under full_history,
+  last_3 and foveal_diff. The cache breakpoint sits after the screenshots, so append-only
+  policies get real cache hits. Tested with dry runs only.
+- [ ] **Live evaluation (needs budget approval, ~$3–5):**
+  `uv run python -m bench.replay.agent_eval --steps 150 --max-cost-usd 5`, then
+  `python -m bench.replay.agent_eval_report runs/<id>.jsonl`.
+  Gate: foveal_diff accuracy within 1 point of full_history at lower cost.
 
 - Asset versioning: a new screenshot of the same source becomes `version + 1`
 - A diff engine: pHash/SSIM gate, then changed-region boxes; accessibility-tree diff where

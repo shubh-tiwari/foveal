@@ -19,6 +19,7 @@ from typing import Any
 
 from PIL import Image
 
+from foveal.diff import FrameDiff, describe, diff_frames
 from foveal.instrument.hashing import sha256_hex
 from foveal.instrument.tokens import estimate_image_tokens
 from foveal.memory.render import (
@@ -122,10 +123,10 @@ class Memory:
 
     # -- ingest -----------------------------------------------------------
 
-    def _finish(self, asset: Asset, l3: bytes) -> Asset:
+    def _finish(self, asset: Asset, l3: bytes, caption: bool = True) -> Asset:
         existing = self.store.get(asset.asset_id)
         if existing is not None:  # perceived before: nothing to pay
-            if existing.caption is None and self.captioner is not None:
+            if caption and existing.caption is None and self.captioner is not None:
                 self.store.update_levels(existing.asset_id, L0=self.captioner(l3))
                 existing = self.store.get(asset.asset_id)
             return existing
@@ -136,23 +137,31 @@ class Memory:
         asset.levels["L3"] = str(self.store.write_blob(asset.asset_id, l3))
         l2 = thumbnail(l3, self.glimpse_tokens)
         asset.levels["L2"] = str(self.store.write_blob(asset.asset_id + "_l2", l2))
-        if self.captioner is not None:
+        if caption and self.captioner is not None:
             asset.levels["L0"] = self.captioner(l3)
         self.store.put(asset)
         return asset
 
     def ingest_image(
-        self, data: bytes, source: str = "", kind: str = "image", text: str | None = None
+        self,
+        data: bytes,
+        source: str = "",
+        kind: str = "image",
+        text: str | None = None,
+        use_ocr: bool = True,
+        caption: bool = True,
     ) -> Asset:
         sha = sha256_hex(data)
         w, h = _size(data)
         levels: dict[str, Any] = {}
-        if text is None:
+        if text is None and use_ocr:
             text = ocr(data)
         if text is not None:
             levels["L1"] = text
         return self._finish(
-            Asset(asset_id=sha, kind=kind, source=source, width=w, height=h, levels=levels), data
+            Asset(asset_id=sha, kind=kind, source=source, width=w, height=h, levels=levels),
+            data,
+            caption=caption,
         )
 
     def ingest(self, source: str | Path | bytes, **kw: Any) -> Asset | list[Asset]:
@@ -264,6 +273,84 @@ class Memory:
         """L0 handles for a set of assets (the budget-aware assembler comes in Phase 4)."""
         return "\n".join(self.describe(i, levels=("L0",)) for i in asset_ids)
 
+    # -- versioned streams (Phase 2) --------------------------------------
+
+    def _versioned(self, row: Any) -> Asset:
+        a = self.get(row.asset_id)
+        a.source, a.version, a.parent_version = row.source, row.version, row.parent_version
+        a.changed_regions = row.diff.get("regions", [])
+        a.origin = {**a.origin, "diff": row.diff}
+        return a
+
+    def ingest_frame(
+        self,
+        image: bytes | Image.Image,
+        source: str,
+        kind: str = "screenshot",
+        caption: bool = False,
+    ) -> Asset:
+        """Record a new observation of `source`. An unchanged frame does not create a version;
+        otherwise the new version stores its diff against the previous one."""
+        data = _encode(image)
+        sha = sha256_hex(data)
+        latest = self.store.latest_version(source)
+        if latest is not None and latest.asset_id == sha:
+            return self._versioned(latest)
+        self.ingest_image(data, source=source, kind=kind, use_ocr=False, caption=caption)
+        if latest is None:
+            d = FrameDiff("full", changed_frac=1.0)
+        else:
+            prev = Path(self.get(latest.asset_id).levels["L3"]).read_bytes()
+            d = diff_frames(_open(prev), _open(data))
+        return self._versioned(self.store.add_version(source, sha, _diff_json(d)))
+
+    def latest(self, source: str) -> Asset:
+        row = self.store.latest_version(source)
+        if row is None:
+            raise KeyError(f"no observations of {source!r}")
+        return self._versioned(row)
+
+    def version(self, source: str, v: int) -> Asset:
+        row = self.store.get_version(source, v)
+        if row is None:
+            raise KeyError(f"{source!r} has no version {v}")
+        return self._versioned(row)
+
+    def history(self, source: str) -> list[Asset]:
+        return [self._versioned(r) for r in self.store.versions(source)]
+
+    def diff_since(self, source: str, since: int) -> DiffView:
+        """Changes in `source` from version `since` to the latest version, computed directly
+        between the two frames (not by chaining), so the crops are exact."""
+        new = self.latest(source)
+        old = self.version(source, since)
+        a = _open(Path(old.levels["L3"]).read_bytes())
+        b_bytes = Path(new.levels["L3"]).read_bytes()
+        b = _open(b_bytes)
+        d = FrameDiff("identical") if old.asset_id == new.asset_id else diff_frames(a, b)
+        text = describe(d, since=f"version {since}") + f" (now version {new.version})"
+        views: list[View] = []
+        if d.kind == "full":
+            views.append(self.look(new.asset_id, detail="full"))
+        elif d.kind == "partial":
+            w, h = b.size
+            for box in d.regions:
+                region = (box.x / w, box.y / h, (box.x + box.w) / w, (box.y + box.h) / h)
+                data = crop_image(b_bytes, region, self.long_edge)
+                cw, ch = _size(data)
+                views.append(
+                    View(
+                        new.asset_id,
+                        "full",
+                        region,
+                        data,
+                        cw,
+                        ch,
+                        estimate_image_tokens(cw, ch, self.model),
+                    )
+                )
+        return DiffView(source, since, new.version, d, text, views)
+
 
 def ocr(data: bytes) -> str | None:
     """L1 text for plain images via Tesseract, when the `ocr` extra is installed."""
@@ -273,3 +360,56 @@ def ocr(data: bytes) -> str | None:
         return None
     with Image.open(io.BytesIO(data)) as im:
         return pytesseract.image_to_string(im).strip() or None
+
+
+# -- versioned streams (Phase 2) ------------------------------------------------
+
+
+@dataclass
+class DiffView:
+    """What changed in a stream between two versions: text plus crops of changed regions."""
+
+    source: str
+    from_version: int
+    to_version: int
+    diff: FrameDiff
+    text: str
+    views: list[View]
+
+    @property
+    def tokens(self) -> int:
+        return sum(v.tokens for v in self.views)
+
+    def blocks(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = [{"type": "text", "text": self.text}]
+        for v in self.views:
+            if v.region is not None:
+                x0, y0, x1, y1 = v.region
+                out.append(
+                    {"type": "text", "text": f"Region ({x0:.2f},{y0:.2f})-({x1:.2f},{y1:.2f}):"}
+                )
+            out.append(v.block())
+        return out
+
+
+def _diff_json(d: FrameDiff) -> dict[str, Any]:
+    return {
+        "kind": d.kind,
+        "scroll_dy": d.scroll_dy,
+        "scroll_band": list(d.scroll_band) if d.scroll_band else None,
+        "regions": [[b.x, b.y, b.w, b.h] for b in d.regions],
+        "changed_frac": round(d.changed_frac, 4),
+    }
+
+
+def _encode(image: bytes | Image.Image) -> bytes:
+    if isinstance(image, bytes):
+        return image
+    buf = io.BytesIO()
+    image.convert("RGB").save(buf, "PNG")  # lossless, so diffs see no re-encoding noise
+    return buf.getvalue()
+
+
+def _open(data: bytes) -> Image.Image:
+    with Image.open(io.BytesIO(data)) as im:
+        return im.convert("RGB")

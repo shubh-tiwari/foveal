@@ -113,7 +113,7 @@ def replay(t: Trajectory) -> dict:
     }
 
 
-def report(results: list[dict], out: Path) -> str:
+def report(results: list[dict], out: Path, title: str = "Multimodal-Mind2Web") -> str:
     tot = {p: sum(r["tokens"][p] for r in results) for p in POLICIES}
     cost = {p: sum(r["cost"][p] for r in results) for p in POLICIES}
     kinds = sum((r["diff_kinds"] for r in results), Counter())
@@ -123,10 +123,9 @@ def report(results: list[dict], out: Path) -> str:
     steps = sum(r["steps"] for r in results)
     base = tot["full_history"]
     lines = [
-        "# foveal Phase 2 offline replay: Multimodal-Mind2Web",
+        f"# foveal Phase 2 offline replay: {title}",
         "",
-        f"{len(results)} trajectories, {steps} steps, 1280x720 viewports, priced as {MODEL}. "
-        "No model calls.",
+        f"{len(results)} trajectories, {steps} steps, priced as {MODEL}. No model calls.",
         "",
         "| Policy | Same info as | Image tokens | vs full history | Est. cost |",
         "| --- | --- | --- | --- | --- |",
@@ -158,7 +157,7 @@ def report(results: list[dict], out: Path) -> str:
     md = "\n".join(lines) + "\n"
     out.mkdir(parents=True, exist_ok=True)
     (out / "report.md").write_text(md)
-    _plot(results, out / "cumulative_tokens.png")
+    _plot(results, out / "cumulative_tokens.png", title)
     (out / "results.json").write_text(
         json.dumps(
             [{k: v for k, v in r.items() if k != "cumulative"} for r in results],
@@ -169,7 +168,7 @@ def report(results: list[dict], out: Path) -> str:
     return md
 
 
-def _plot(results: list[dict], path: Path) -> None:
+def _plot(results: list[dict], path: Path, title: str) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -194,7 +193,7 @@ def _plot(results: list[dict], path: Path) -> None:
         ax.plot(range(1, len(ys) + 1), ys, label=p, color=colors[p], lw=2.2)
     ax.set_xlabel("agent step")
     ax.set_ylabel("cumulative image tokens (median trajectory)")
-    ax.set_title("Web-agent screenshots: tokens by history policy")
+    ax.set_title(f"{title}: image tokens by history policy", fontsize=10)
     ax.legend(frameon=False)
     ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
@@ -204,14 +203,26 @@ def _plot(results: list[dict], path: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--source", default="mind2web", choices=["mind2web", "video"])
+    ap.add_argument("--every-s", type=float, default=2.0, help="video: seconds per frame")
     ap.add_argument("--shards", type=int, default=1)
     ap.add_argument("--min-steps", type=int, default=3)
     ap.add_argument("--out", default="runs/phase2-replay")
     args = ap.parse_args(argv)
-    trajs = load(args.shards, args.min_steps)
+    if args.source == "video":
+        from bench.replay import videos
+
+        trajs = videos.load(args.every_s)
+    else:
+        trajs = load(args.shards, args.min_steps)
     print(f"{len(trajs)} trajectories, {sum(len(t.steps) for t in trajs)} steps")
     results = [replay(t) for t in trajs]
-    print(report(results, Path(args.out)))
+    title = (
+        f"screen recordings, one frame every {args.every_s:g}s"
+        if args.source == "video"
+        else "Multimodal-Mind2Web"
+    )
+    print(report(results, Path(args.out), title))
     return 0
 
 
