@@ -6,6 +6,15 @@ context, zoom into detail only when needed, and share what was learned across su
 > Status: **Phase 0 (measurement).** The memory layer isn't built yet. This repo currently
 > measures how many image tokens agent harnesses spend re-sending pixels they already sent.
 
+## Phase 0 result
+
+On 16 MMLongBench-Doc questions answered by Claude Sonnet 5.5 (an orchestrator plus reader
+sub-agents), **62.3% of all image tokens were pages already sent earlier in the same task**.
+That passes the 40% gate. Prompt caching already served about 74% of those repeats. See
+[ROADMAP.md](ROADMAP.md) for the full numbers.
+
+![Cumulative image tokens per model call](docs/phase0_cumulative_image_tokens.png)
+
 ## Phase 0: measure re-perception
 
 `foveal.instrument` wraps the Anthropic client without changing any request. It logs every
