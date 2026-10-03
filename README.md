@@ -17,7 +17,7 @@ MMLongBench-Doc: 4 documents of 28–60 pages, an orchestrator with reader sub-a
 model answers the same questions in both modes, and one judge scores every answer.
 
 | Model | Mode | Correct | Image tokens / question |
-| --- | --- | --- | --- | --- |
+| --- | --- | --- | --- |
 | Claude Sonnet 5.5 (16 questions) | full page images | 10/16 | 156K |
 | | **foveal memory** | **10/16** | **11K (-93%)** |
 | Qwen3.7 Plus via OpenRouter (10 questions) | full page images | 10/10 | 386K |
@@ -30,7 +30,7 @@ model answers the same questions in both modes, and one judge scores every answe
   <img alt="Cost and image tokens per question, full page images vs foveal memory, for Claude Sonnet 5.5 and Qwen3.7 Plus" src="docs/figures/docqa-light.png">
 </picture>
 
-Cost per question includes foveal's one-off captioning: about $0.0006 per page with Claude
+The chart's cost per question includes foveal's one-off captioning: about $0.0006 per page with Claude
 Haiku 4.5, or $0.00015 with Qwen.
 
 ### Screenshot history (offline replay, no model calls)
