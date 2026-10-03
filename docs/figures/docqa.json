@@ -30,5 +30,21 @@
   "success": 0.8,
   "cost": 0.0293673088,
   "image_tokens": 16128.4
+ },
+ {
+  "model": "Qwen3.7 Plus,\nfigure-heavy",
+  "mode": "full pages",
+  "n": 8,
+  "success": 0.875,
+  "cost": 0.041756752,
+  "image_tokens": 190302.0
+ },
+ {
+  "model": "Qwen3.7 Plus,\nfigure-heavy",
+  "mode": "foveal",
+  "n": 8,
+  "success": 0.875,
+  "cost": 0.027709928,
+  "image_tokens": 36645.75
  }
 ]

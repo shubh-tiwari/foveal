@@ -99,6 +99,23 @@ spending cap after 10):
 
 ![Cost and image tokens per question, both models](figures/docqa-light.png)
 
+**Qwen3.7 Plus, 8 fresh figure/table/chart questions** (documents not used above):
+
+| Configuration | Correct | Image tokens | Cost incl. captions |
+| --- | --- | --- | --- |
+| Full page images (baseline) | 7/8 | 1.52M | $0.33 |
+| foveal memory | 7/8 | 293K | **$0.22** |
+
+On figure-heavy questions the agents call `look()` more, so foveal saves less (-81% image
+tokens, -34% cost), but accuracy held.
+
+**Shared notes (Qwen3.7 Plus, the 13 questions both runs answered).** Memory alone scored
+9/13 for $0.42. Memory with notes scored 8/13 for $0.49 (+17%), with 58% more image tokens.
+Agents wrote 60 notes, but questions about the same document asked about different
+things, so earlier notes rarely answered later questions. Note-writing and longer prompts
+added cost. Cross-question reuse on this benchmark already happens at the page level
+(captions and text perceived once per document); facts need overlapping information needs.
+
 **Qwen's two misses** were a URL count (29 against a gold of 30) and a question about a
 figure that the document can't answer, where it said "0" instead of "Not answerable". In
 both, it reasoned from captions and the text layer instead of calling `look()`, so foveal
@@ -144,9 +161,6 @@ input for context management, not an afterthought.
 
 | Run | Purpose |
 | --- | --- |
-| Figure/table/chart slice, foveal memory | The full-page baseline on 8 fresh figure-heavy questions is done (Qwen); the memory side is not |
-| Shared notes across questions | Same questions with `--facts`, to test reuse of earlier answers |
 | Mind2Web next-action accuracy | Full history vs keep-last-3 vs foveal diffs, live |
-
-Each can be run with `bench.mmlongbench.run` / `bench.replay.agent_eval` under a
-`--max-cost-usd` cap.
+| Shared facts on overlapping needs | Parallel readers on one question, or a screen workload |
+| Image auto-promotion | Does promoting relevant pages recover Qwen's misses? |

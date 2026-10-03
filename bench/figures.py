@@ -48,14 +48,10 @@ THEMES = {
     },
 }
 
-DOCQA = [  # (model label, baseline log, foveal log, optional foveal+facts log)
-    ("Claude Sonnet 5.5", "runs/phase0-sonnet55.jsonl", "runs/phase1-memory-v2.jsonl", None),
-    (
-        "Qwen3.7 Plus",
-        "runs/qwen-16-images.jsonl",
-        "runs/qwen-16-memory.jsonl",
-        "runs/qwen-16-facts.jsonl",
-    ),
+DOCQA = [  # (label, full-page log, foveal log)
+    ("Claude Sonnet 5.5", "runs/phase0-sonnet55.jsonl", "runs/phase1-memory-v2.jsonl"),
+    ("Qwen3.7 Plus", "runs/qwen-16-images.jsonl", "runs/qwen-16-memory.jsonl"),
+    ("Qwen3.7 Plus,\nfigure-heavy", "runs/qwen-p1s-images.jsonl", "runs/qwen-p1s-memory.jsonl"),
 ]
 OUT = Path("docs/figures")
 
@@ -139,12 +135,12 @@ def success(path: str, ids: set[str], scorer: Any) -> float:
 
 def docqa_rows(scorer: Any) -> list[dict]:
     rows = []
-    for model, base, fov, facts in DOCQA:
+    for model, base, fov in DOCQA:
         if not (Path(base).exists() and Path(fov).exists()):
             continue
-        logs = [base, fov] + ([facts] if facts and Path(facts).exists() else [])
+        logs = [base, fov]
         ids = set.intersection(*(set(_tasks(read_jsonl(p))) for p in logs))
-        for label, p in zip(["full pages", "foveal", "foveal + notes"], logs, strict=False):
+        for label, p in zip(["full pages", "foveal"], logs, strict=True):
             rows.append(
                 {
                     "model": model,
@@ -164,7 +160,7 @@ def chart_docqa(rows: list[dict], t: dict, path: Path) -> None:
     models = list(dict.fromkeys(r["model"] for r in rows))
     modes = ["full pages", "foveal"]
     colors = {"full pages": t["base"], "foveal": t["foveal"]}
-    fig, axes = plt.subplots(1, 2, figsize=(9.6, 3.6))
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 3.8))
     for ax, key, title, fmt in (
         (axes[0], "cost", "Cost per question (USD)", lambda v: f"${v:.3f}"),
         (axes[1], "image_tokens", "Image tokens per question", lambda v: f"{v / 1000:.0f}K"),

@@ -22,6 +22,8 @@ model answers the same questions in both modes, and one judge scores every answe
 | | **foveal memory** | **10/16** | **11K (-93%)** | **$0.088 (-66%)** |
 | Qwen3.7 Plus via OpenRouter (10 questions) | full page images | 10/10 | 386K | $0.066 |
 | | **foveal memory** | **8/10** | **16K (-96%)** | **$0.029 (-56%)** |
+| Qwen3.7 Plus, figure/table/chart questions (8 new) | full page images | 7/8 | 190K | $0.042 |
+| | **foveal memory** | **7/8** | **37K (-81%)** | **$0.028 (-34%)** |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/figures/docqa-dark.png">
@@ -54,8 +56,16 @@ targeted (579 of 579). On compressed video, at most 0.27% of pixels were off.
 - **Perceive once, pay a fraction.** Captions and text layers answer many questions, and
   `look()` fetches pixels when they're needed. Image tokens fell 93–96% on both models.
 - **The accuracy cost depends on the model.** Claude Sonnet 5.5 kept full accuracy. Qwen3.7
-  Plus lost 2 of 10. On a URL count and a figure question it trusted the text instead of
-  calling `look()`, so weaker tool users may need foveal to promote images more readily.
+  Plus lost 2 of 10 on the first set. On a URL count and a figure question it trusted the
+  text instead of calling `look()`, so weaker tool users may need foveal to promote images
+  more readily. On fresh figure-heavy questions Qwen matched full pages (7/8 each), and the
+  saving was smaller (-34% cost) because it rightly looked at more pixels.
+- **Shared notes didn't pay off on this workload.** Agents wrote 60 notes, but later
+  questions on the same document asked about different things, so the notes rarely
+  answered them. Writing and reading notes added calls: memory + notes cost 17% more and
+  scored 8/13 against 9/13. Reuse across questions does happen at the page level, where
+  each document's captions and text are stored once. Facts need workloads where agents
+  share what they need, such as screens or parallel readers.
 - **Keeping only the last N screenshots defeats prompt caching.** The sliding window changes
   the prompt prefix every step, so on web tasks it costs *more* than sending everything.
   foveal's append-only diffs keep all the information for about half the cost of keep-last-3.
@@ -187,10 +197,10 @@ refuses to start runs whose caps add up to more than `--budget`.
 - The screen results come from offline replay. A live web-agent accuracy run (Mind2Web
   next-action prediction under each history policy) is built but not yet run.
 - Next:
-  - Run foveal memory on the 8-question figure/table/chart set (its full-page baseline is
-    done).
-  - Run the shared-notes mode across questions.
   - Auto-promote images for models that under-use `look()`.
+  - Test shared facts on a workload where agents need the same facts (parallel readers,
+    screens).
+  - Run the live Mind2Web check.
 
 The development history is in [docs/development_log.md](docs/development_log.md).
 
