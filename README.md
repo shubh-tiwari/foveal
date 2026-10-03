@@ -16,14 +16,14 @@ first, pixels on request, and for screens, only what changed.
 MMLongBench-Doc: 4 documents of 28–60 pages, an orchestrator with reader sub-agents. Each
 model answers the same questions in both modes, and one judge scores every answer.
 
-| Model | Mode | Correct | Image tokens / question | Cost / question |
+| Model | Mode | Correct | Image tokens / question |
 | --- | --- | --- | --- | --- |
-| Claude Sonnet 5.5 (16 questions) | full page images | 10/16 | 156K | $0.254 |
-| | **foveal memory** | **10/16** | **11K (-93%)** | **$0.088 (-66%)** |
-| Qwen3.7 Plus via OpenRouter (10 questions) | full page images | 10/10 | 386K | $0.066 |
-| | **foveal memory** | **8/10** | **16K (-96%)** | **$0.029 (-56%)** |
-| Qwen3.7 Plus, figure/table/chart questions (8 new) | full page images | 7/8 | 190K | $0.042 |
-| | **foveal memory** | **7/8** | **37K (-81%)** | **$0.028 (-34%)** |
+| Claude Sonnet 5.5 (16 questions) | full page images | 10/16 | 156K |
+| | **foveal memory** | **10/16** | **11K (-93%)** |
+| Qwen3.7 Plus via OpenRouter (10 questions) | full page images | 10/10 | 386K |
+| | **foveal memory** | **8/10** | **16K (-96%)** |
+| Qwen3.7 Plus, figure/table/chart questions (8 new) | full page images | 7/8 | 190K |
+| | **foveal memory** | **7/8** | **37K (-81%)** |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/figures/docqa-dark.png">
